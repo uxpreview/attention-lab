@@ -1,0 +1,312 @@
+/**
+ * Ridge regression with feature standardisation and k-fold selection of the
+ * regularisation strength.
+ *
+ * The gaze model is a linear map from a hand-built feature basis (iris offsets,
+ * head pose, and their interactions) to screen coordinates. Ridge rather than
+ * plain least squares because calibration gives us only a few hundred samples
+ * for ~20 correlated features, so the unregularised solution is unstable —
+ * small head movements during calibration blow up the weights.
+ */
+
+export interface RidgeModel {
+  /** Feature means, used to centre inputs at predict time. */
+  mean: Float64Array;
+  /** Feature standard deviations, used to scale inputs at predict time. */
+  std: Float64Array;
+  /** Weights for the x target, including a leading intercept. */
+  wx: Float64Array;
+  /** Weights for the y target, including a leading intercept. */
+  wy: Float64Array;
+  /** The lambda chosen by cross-validation. */
+  lambda: number;
+  /** Mean cross-validated error, in the same units as the targets. */
+  cvError: number;
+  /** Number of samples the model was fit on. */
+  sampleCount: number;
+}
+
+const LAMBDA_GRID = [1e-4, 1e-3, 1e-2, 1e-1, 0.5, 1, 5, 20, 100];
+
+/**
+ * Solves `A w = B` for multiple right-hand sides via Gauss-Jordan elimination
+ * with partial pivoting. `A` is n x n, `B` is n x m. Returns n x m.
+ * Both inputs are consumed (modified in place).
+ */
+function solveInPlace(A: Float64Array, B: Float64Array, n: number, m: number): Float64Array {
+  for (let col = 0; col < n; col++) {
+    // Partial pivot: find the row with the largest magnitude in this column.
+    let pivotRow = col;
+    let pivotVal = Math.abs(A[col * n + col]);
+    for (let r = col + 1; r < n; r++) {
+      const v = Math.abs(A[r * n + col]);
+      if (v > pivotVal) {
+        pivotVal = v;
+        pivotRow = r;
+      }
+    }
+
+    if (pivotVal < 1e-12) {
+      // Singular even after ridge. Should not happen with lambda > 0, but bail
+      // gracefully rather than emitting NaNs into the gaze stream.
+      continue;
+    }
+
+    if (pivotRow !== col) {
+      for (let c = 0; c < n; c++) {
+        const tmp = A[col * n + c];
+        A[col * n + c] = A[pivotRow * n + c];
+        A[pivotRow * n + c] = tmp;
+      }
+      for (let c = 0; c < m; c++) {
+        const tmp = B[col * m + c];
+        B[col * m + c] = B[pivotRow * m + c];
+        B[pivotRow * m + c] = tmp;
+      }
+    }
+
+    const diag = A[col * n + col];
+    for (let c = 0; c < n; c++) A[col * n + c] /= diag;
+    for (let c = 0; c < m; c++) B[col * m + c] /= diag;
+
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = A[r * n + col];
+      if (factor === 0) continue;
+      for (let c = 0; c < n; c++) A[r * n + c] -= factor * A[col * n + c];
+      for (let c = 0; c < m; c++) B[r * m + c] -= factor * B[col * m + c];
+    }
+  }
+
+  return B;
+}
+
+interface Standardisation {
+  mean: Float64Array;
+  std: Float64Array;
+}
+
+function standardise(rows: number[][], dim: number): Standardisation {
+  const mean = new Float64Array(dim);
+  const std = new Float64Array(dim);
+
+  for (const row of rows) {
+    for (let d = 0; d < dim; d++) mean[d] += row[d];
+  }
+  for (let d = 0; d < dim; d++) mean[d] /= rows.length;
+
+  for (const row of rows) {
+    for (let d = 0; d < dim; d++) {
+      const diff = row[d] - mean[d];
+      std[d] += diff * diff;
+    }
+  }
+  for (let d = 0; d < dim; d++) {
+    std[d] = Math.sqrt(std[d] / rows.length);
+    // Guard constant features: a zero std would divide to Infinity.
+    if (std[d] < 1e-8) std[d] = 1;
+  }
+
+  return { mean, std };
+}
+
+/**
+ * Fits ridge weights on pre-standardised design rows. Returns weights of length
+ * dim + 1, with the intercept first. The intercept is not penalised, which is
+ * why it is handled as a separate mean-offset rather than an extra column.
+ */
+function fitWeights(
+  rows: number[][],
+  targetX: number[],
+  targetY: number[],
+  st: Standardisation,
+  dim: number,
+  lambda: number
+): { wx: Float64Array; wy: Float64Array } {
+  const n = rows.length;
+
+  // Targets are centred so the intercept is simply the target mean.
+  let meanX = 0;
+  let meanY = 0;
+  for (let i = 0; i < n; i++) {
+    meanX += targetX[i];
+    meanY += targetY[i];
+  }
+  meanX /= n;
+  meanY /= n;
+
+  const XtX = new Float64Array(dim * dim);
+  const XtY = new Float64Array(dim * 2);
+  const z = new Float64Array(dim);
+
+  for (let i = 0; i < n; i++) {
+    const row = rows[i];
+    for (let d = 0; d < dim; d++) z[d] = (row[d] - st.mean[d]) / st.std[d];
+
+    const dx = targetX[i] - meanX;
+    const dy = targetY[i] - meanY;
+
+    for (let a = 0; a < dim; a++) {
+      const za = z[a];
+      if (za === 0) continue;
+      for (let b = a; b < dim; b++) XtX[a * dim + b] += za * z[b];
+      XtY[a * 2] += za * dx;
+      XtY[a * 2 + 1] += za * dy;
+    }
+  }
+
+  // Mirror the upper triangle we filled into the lower triangle.
+  for (let a = 0; a < dim; a++) {
+    for (let b = a + 1; b < dim; b++) XtX[b * dim + a] = XtX[a * dim + b];
+    XtX[a * dim + a] += lambda * n;
+  }
+
+  const solved = solveInPlace(XtX, XtY, dim, 2);
+
+  const wx = new Float64Array(dim + 1);
+  const wy = new Float64Array(dim + 1);
+  wx[0] = meanX;
+  wy[0] = meanY;
+  for (let d = 0; d < dim; d++) {
+    wx[d + 1] = solved[d * 2];
+    wy[d + 1] = solved[d * 2 + 1];
+  }
+
+  return { wx, wy };
+}
+
+function predictStandardised(
+  features: ArrayLike<number>,
+  st: Standardisation,
+  wx: Float64Array,
+  wy: Float64Array,
+  dim: number
+): [number, number] {
+  let x = wx[0];
+  let y = wy[0];
+  for (let d = 0; d < dim; d++) {
+    const z = (features[d] - st.mean[d]) / st.std[d];
+    x += z * wx[d + 1];
+    y += z * wy[d + 1];
+  }
+  return [x, y];
+}
+
+/**
+ * Fits a gaze model, choosing lambda by k-fold cross-validation on mean
+ * Euclidean error. Folds are interleaved rather than contiguous so that each
+ * fold sees samples from every calibration point.
+ */
+export function fitRidge(
+  rows: number[][],
+  targetX: number[],
+  targetY: number[],
+  folds = 5
+): RidgeModel {
+  if (rows.length === 0) throw new Error("Cannot fit a gaze model with no samples");
+  const dim = rows[0].length;
+  const effectiveFolds = Math.min(folds, rows.length);
+
+  let bestLambda = LAMBDA_GRID[0];
+  let bestError = Infinity;
+
+  if (effectiveFolds >= 2) {
+    for (const lambda of LAMBDA_GRID) {
+      let totalError = 0;
+      let counted = 0;
+
+      for (let fold = 0; fold < effectiveFolds; fold++) {
+        const trainRows: number[][] = [];
+        const trainX: number[] = [];
+        const trainY: number[] = [];
+        const testIdx: number[] = [];
+
+        for (let i = 0; i < rows.length; i++) {
+          if (i % effectiveFolds === fold) {
+            testIdx.push(i);
+          } else {
+            trainRows.push(rows[i]);
+            trainX.push(targetX[i]);
+            trainY.push(targetY[i]);
+          }
+        }
+        if (trainRows.length <= dim || testIdx.length === 0) continue;
+
+        const st = standardise(trainRows, dim);
+        const { wx, wy } = fitWeights(trainRows, trainX, trainY, st, dim, lambda);
+
+        for (const i of testIdx) {
+          const [px, py] = predictStandardised(rows[i], st, wx, wy, dim);
+          totalError += Math.hypot(px - targetX[i], py - targetY[i]);
+          counted++;
+        }
+      }
+
+      if (counted > 0) {
+        const meanError = totalError / counted;
+        if (meanError < bestError) {
+          bestError = meanError;
+          bestLambda = lambda;
+        }
+      }
+    }
+  }
+
+  const st = standardise(rows, dim);
+  const { wx, wy } = fitWeights(rows, targetX, targetY, st, dim, bestLambda);
+
+  return {
+    mean: st.mean,
+    std: st.std,
+    wx,
+    wy,
+    lambda: bestLambda,
+    cvError: Number.isFinite(bestError) ? bestError : NaN,
+    sampleCount: rows.length,
+  };
+}
+
+export function predict(model: RidgeModel, features: ArrayLike<number>): [number, number] {
+  return predictStandardised(
+    features,
+    { mean: model.mean, std: model.std },
+    model.wx,
+    model.wy,
+    model.mean.length
+  );
+}
+
+/** Serialisable form, for persisting a calibration between sessions. */
+export interface SerialisedModel {
+  mean: number[];
+  std: number[];
+  wx: number[];
+  wy: number[];
+  lambda: number;
+  cvError: number;
+  sampleCount: number;
+}
+
+export function serialiseModel(model: RidgeModel): SerialisedModel {
+  return {
+    mean: Array.from(model.mean),
+    std: Array.from(model.std),
+    wx: Array.from(model.wx),
+    wy: Array.from(model.wy),
+    lambda: model.lambda,
+    cvError: model.cvError,
+    sampleCount: model.sampleCount,
+  };
+}
+
+export function deserialiseModel(data: SerialisedModel): RidgeModel {
+  return {
+    mean: Float64Array.from(data.mean),
+    std: Float64Array.from(data.std),
+    wx: Float64Array.from(data.wx),
+    wy: Float64Array.from(data.wy),
+    lambda: data.lambda,
+    cvError: data.cvError,
+    sampleCount: data.sampleCount,
+  };
+}

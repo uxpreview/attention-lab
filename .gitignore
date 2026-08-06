@@ -1,0 +1,5 @@
+node_modules/
+dist/
+public/models/
+*.local
+.DS_Store
