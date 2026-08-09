@@ -1,16 +1,19 @@
-/* Attention Lab, dressed in the ryankm.com design system.
+/* Attention Lab, wearing the ryankm.com design system.
  *
- * Every class name here is the one the TypeScript already writes, so this file
- * is the whole restyle: no markup was reshaped to fit a look. Colors, radii,
- * easings and the type scale all come from src/tokens.css, which is a vendored
- * copy of the site's tokens and is not edited on this side.
+ * This tool is EXP-038 in the Lab and is hosted on its own subdomain, so the
+ * page has to do the work the site's /lab/<slug> route normally does: the
+ * trail back up, the record voice, the claim in display type, the lede, the
+ * experiment, then bench notes. The shape below is that route's shape.
  *
- * Three site conventions do most of the work:
+ * Colors, radii, easings and the measure come from src/tokens.css, a vendored
+ * copy of the site's tokens that is never edited on this side.
+ *
+ * The site's conventions doing most of the work here:
  *   the label voice   — 12px, 500, uppercase, 0.12em tracking, muted
- *   the card recipe   — surface ground, hairline stroke, 12px radius, and a
- *                       stroke that warms toward the accent on hover. No lift,
- *                       no shadow, no glow.
- *   the pill          — 999px radius on anything that reads as a control
+ *   the card recipe   — surface ground, hairline stroke, 12px radius, stroke
+ *                       warms toward the accent on hover. No lift, no shadow
+ *   the chase line    — underlines draw in from the left, exit right
+ *   two rule weights  — hairline for rhythm, heavy for section breaks
  */
 
 @import "./tokens.css";
@@ -53,25 +56,79 @@ label,
   touch-action: manipulation;
 }
 
-#app {
-  max-width: 1180px;
+/* The site's shell. Reading-width content is capped by ch inside it. */
+.container {
   margin: 0 auto;
-  padding: 32px 24px 72px;
+  width: 100%;
+  max-width: var(--maxw);
+  padding: 0 24px;
+}
+@media (min-width: 768px) {
+  .container {
+    padding: 0 40px;
+  }
+}
+
+/* The session and results screens replace the whole page rather than sitting
+   inside it, so they carry their own top padding. */
+.screen {
+  padding-top: 32px;
+  padding-bottom: 64px;
+}
+.screen-head {
+  margin-bottom: 20px;
 }
 
 /* --- Type ------------------------------------------------------------- */
-/* The display register: Figtree, bold and tight, matching the site. */
 
-h1 {
+.label,
+.eyebrow {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.label-strong {
+  color: var(--strong);
+}
+
+.t-h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(48px, 9.2vw, 112px);
+  line-height: 0.92;
+  letter-spacing: -0.03em;
+  color: var(--strong);
+  text-wrap: balance;
+  margin: 24px 0 0;
+  max-width: 16ch;
+}
+.t-display {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(26px, 3vw, 34px);
-  line-height: 1.1;
+  font-size: clamp(30px, 3.8vw, 54px);
+  line-height: 1.04;
   letter-spacing: -0.015em;
   color: var(--strong);
-  margin: 0;
   text-wrap: balance;
+  margin: 0;
+  max-width: 18ch;
 }
+.t-lede {
+  font-size: clamp(18px, 1.6vw, 21px);
+  line-height: 1.55;
+  color: var(--body-2);
+  text-wrap: pretty;
+  max-width: 58ch;
+  margin: 24px 0 0;
+}
+/* The wordmark dot: the site's one vermillion accent in display type. */
+.dot {
+  color: var(--accent-warm);
+}
+
 h2 {
   font-family: var(--font-display);
   font-weight: 700;
@@ -81,8 +138,8 @@ h2 {
   color: var(--strong);
   margin: 0 0 14px;
 }
-/* h3 is the section label in this app, not a heading in the type scale, so it
-   takes the site's label voice. .study-body h3 opts back out below. */
+/* h3 is a section label in this app rather than a step in the type scale, so
+   it takes the label voice. .study-body h3 opts back out below. */
 h3 {
   font-family: var(--font-mono);
   font-weight: 500;
@@ -104,7 +161,7 @@ p {
   color: var(--muted);
 }
 .error {
-  color: var(--signal-bad);
+  color: var(--accent-warm-ink);
   min-height: 20px;
 }
 .note {
@@ -116,42 +173,161 @@ p {
   border-radius: 0 6px 6px 0;
 }
 
-/* --- Frame ------------------------------------------------------------ */
+/* --- The experiment page shell ---------------------------------------- */
 
-.app-header {
+/* The trail every detail page on the site wears: hairline bar, parent left,
+   current page beside it. */
+.brc {
+  border-bottom: 1px solid var(--line);
+}
+.brc-inner {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 28px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--rule);
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.app-header p {
-  margin: 6px 0 0;
+.brc-inner a {
+  color: inherit;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+.brc-inner a:hover {
+  color: var(--strong);
+}
+.brc-inner [aria-current] {
+  color: var(--strong);
 }
 
-/* The way back to the section this belongs to. It is the only link on the
-   page that leaves, so it carries the site's chase underline. */
-.back-link {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent-ink);
-  text-decoration: none;
+.exp-head {
+  padding-top: 40px;
+}
+@media (min-width: 768px) {
+  .exp-head {
+    padding-top: 56px;
+  }
+}
+
+/* Record voice: number, kind, state, then a rule that runs out to the stack. */
+.exp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+}
+.exp-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.exp-rule {
+  flex: 1;
+  min-width: 40px;
+  height: 1px;
+  background: var(--line);
+}
+.exp-stack {
+  display: none;
+}
+@media (min-width: 640px) {
+  .exp-stack {
+    display: block;
+  }
+}
+
+.exp-body {
+  padding-top: 40px;
+  padding-bottom: 40px;
+}
+@media (min-width: 768px) {
+  .exp-body {
+    padding-top: 56px;
+    padding-bottom: 56px;
+  }
+}
+
+.panel-lede {
+  max-width: 62ch;
+  color: var(--body-2);
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 16px 0 26px;
+}
+.panel .eyebrow {
+  margin: 0 0 14px;
+}
+
+/* --- Bench notes + footer --------------------------------------------- */
+
+.app-footer {
+  padding-top: 8px;
+  padding-bottom: 64px;
+}
+.notes-title {
+  max-width: 16ch;
+}
+.notes {
+  margin: 32px 0 0;
+}
+.note-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+.note-row:last-child {
+  border-bottom: 1px solid var(--line);
+}
+@media (min-width: 768px) {
+  .note-row {
+    grid-template-columns: 220px 1fr;
+    gap: 40px;
+  }
+}
+.note-row dt {
+  padding-top: 3px;
+}
+.note-row dd {
+  margin: 0;
+  max-width: 64ch;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--body);
+}
+
+.footer-credit {
+  margin: 36px 0 0;
+}
+/* The site's arrow link: chase underline, arrow nudges on hover. */
+.arrow-link {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  color: var(--accent-ink);
+  text-decoration: none;
 }
-.back-link::after {
+.arrow-link::after {
   content: "";
   position: absolute;
   left: 0;
-  bottom: -3px;
+  bottom: -2px;
   height: 1.5px;
   width: 100%;
   background: currentColor;
@@ -159,48 +335,17 @@ p {
   transform-origin: right center;
   transition: transform var(--dur-struct) var(--ease-expo);
 }
-.back-link span[aria-hidden] {
+.arrow-link span {
   transition: transform 0.2s ease;
 }
 @media (hover: hover) and (pointer: fine) {
-  .back-link:hover::after {
+  .arrow-link:hover::after {
     transform: scaleX(1);
     transform-origin: left center;
   }
-  .back-link:hover span[aria-hidden] {
-    transform: translateX(-3px);
+  .arrow-link:hover span {
+    transform: translateX(3px);
   }
-}
-
-.app-footer {
-  margin-top: 48px;
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
-  font-size: 13.5px;
-}
-.app-footer p {
-  max-width: 68ch;
-}
-.footer-credit {
-  margin-top: 10px;
-  margin-bottom: 0;
-}
-
-.header-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-}
-
-/* The footer credit sits mid-sentence, so it keeps the underline behavior but
-   drops the label voice and the arrow spacing. */
-.back-link-plain {
-  font-family: inherit;
-  font-size: inherit;
-  letter-spacing: normal;
-  text-transform: none;
-  display: inline;
 }
 
 .pill {
@@ -218,12 +363,12 @@ p {
 }
 .pill-quiet {
   color: var(--accent-ink);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 
 /* --- Controls --------------------------------------------------------- */
-/* Pills, mono-labelled, same contract as the site's buttons: the primary is
-   an outline that fills on hover and flips its label to the ground color. */
+/* Pills, mono-labelled. The primary is an ink outline that fills on hover and
+   flips its label to the ground color, same contract as the site's buttons. */
 
 .btn {
   font-family: var(--font-mono);
@@ -235,7 +380,7 @@ p {
   color: var(--strong);
   border: 1.5px solid var(--line);
   border-radius: var(--r-chip);
-  padding: 11px 22px;
+  padding: 12px 24px;
   cursor: pointer;
   transition:
     background-color 0.2s,
@@ -276,10 +421,10 @@ p {
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 11px 13px;
   color: var(--strong);
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
 }
 .input::placeholder {
   color: var(--muted);
@@ -305,14 +450,14 @@ p {
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin: 18px 0;
+  gap: 18px;
+  margin: 20px 0;
 }
 .checkbox {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--body-2);
   margin: 14px 0;
 }
@@ -320,13 +465,18 @@ p {
   accent-color: var(--accent);
 }
 
-/* The card recipe. */
+/* The card recipe, at panel scale. */
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-card);
-  padding: 22px;
-  margin-bottom: 28px;
+  padding: 28px;
+  margin-bottom: 32px;
+}
+@media (min-width: 768px) {
+  .panel {
+    padding: 40px;
+  }
 }
 
 .drop-zone {
@@ -335,11 +485,12 @@ p {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border: 1.5px dashed var(--line);
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 30%, var(--line));
   border-radius: var(--r-card);
-  padding: 32px;
+  padding: 36px;
   cursor: pointer;
   text-align: center;
+  background: var(--bg);
   transition:
     border-color 0.25s ease,
     background 0.25s ease;
@@ -351,11 +502,13 @@ p {
 }
 .drop-zone.has-file {
   border-style: solid;
-  border-color: color-mix(in srgb, var(--signal-good) 70%, var(--line));
+  border-color: var(--accent);
 }
 .drop-title {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
   color: var(--strong);
 }
 .file-input {
@@ -412,16 +565,16 @@ p {
 .study-body h3 {
   font-family: var(--font-display);
   margin: 0 0 4px;
-  font-size: 17px;
+  font-size: 19px;
   font-weight: 700;
   line-height: 1.15;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   text-transform: none;
   color: var(--strong);
 }
 .study-body p {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .study-meta {
   font-family: var(--font-mono);
@@ -452,7 +605,7 @@ p {
 .camera-preview {
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #000;
+  background: #003f48;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -478,7 +631,7 @@ p {
 }
 .accuracy p {
   margin: 4px 0 0;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .accuracy-good {
   border-left-color: var(--signal-good);
@@ -490,17 +643,45 @@ p {
   border-left-color: var(--signal-bad);
 }
 
-/* --- Calibration ------------------------------------------------------ */
-/* The overlay is the one place the ground goes darker than the page: a
-   calibration dot has to be the brightest thing on the screen or the eye
-   never commits to it. */
+/* --- The two dark rooms ----------------------------------------------- */
+/* Calibration and recording take over the whole screen and remap to the
+   site's band tokens, so everything inside recomposes with no extra styling.
+   They are dark for a reason that is not decoration: a participant's pupils
+   adapt to whatever the chrome is doing, and a calibration dot has to be the
+   brightest thing on the screen or the eye never commits to it. */
 
-.calib-overlay {
+.calib-overlay,
+.record-stage {
+  color-scheme: dark;
+  --bg: #003f48;
+  --surface: #0c4a53;
+  --line: #2b5a62;
+  --rule: #cfe0e2;
+  --accent: #ffb8a4;
+  --accent-ink: #ffb8a4;
+  --accent-contrast: #003f48;
+  --accent-warm: #ffb8a4;
+  --accent-warm-ink: #ffb8a4;
+  --tint: #0c4a53;
+  --strong: #fdf4e7;
+  --body: #d9e5e4;
+  --body-2: #c3d4d4;
+  --muted: #9fb6ba;
+  --signal-good: #7fd4a8;
+  --signal-warn: #f0c674;
+  --signal-bad: #ff9c8f;
   position: fixed;
   inset: 0;
-  background: #002b31;
   z-index: 900;
+  background: var(--bg);
+  color: var(--body);
 }
+.record-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .calib-instruction {
   position: absolute;
   top: 50%;
@@ -510,6 +691,10 @@ p {
   text-align: center;
   transition: opacity 0.4s ease;
   pointer-events: none;
+  color: var(--body);
+}
+.calib-instruction.is-dim {
+  opacity: 0;
 }
 .calib-progress {
   font-family: var(--font-mono);
@@ -518,9 +703,6 @@ p {
   text-transform: uppercase;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-}
-.calib-instruction.is-dim {
-  opacity: 0;
 }
 .calib-dot {
   position: absolute;
@@ -550,17 +732,6 @@ p {
   }
 }
 
-/* --- Recording -------------------------------------------------------- */
-
-.record-stage {
-  position: fixed;
-  inset: 0;
-  background: #002b31;
-  z-index: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .record-stimulus {
   position: absolute;
   inset: 0;
@@ -606,14 +777,14 @@ p {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--body-2);
-  background: color-mix(in srgb, #002b31 80%, transparent);
+  background: color-mix(in srgb, #003f48 82%, transparent);
   padding: 6px 14px;
   border-radius: var(--r-chip);
 }
 .task-prompt {
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, #002b31 97%, transparent);
+  background: color-mix(in srgb, #003f48 97%, transparent);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -623,10 +794,11 @@ p {
   gap: 6px;
 }
 .task-prompt h2 {
-  font-size: clamp(24px, 3.4vw, 32px);
-  line-height: 1.15;
-  max-width: 640px;
-  margin: 8px 0 14px;
+  font-size: clamp(26px, 3.8vw, 40px);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  max-width: 20ch;
+  margin: 10px 0 16px;
 }
 .task-label {
   font-family: var(--font-mono);
@@ -639,8 +811,8 @@ p {
 }
 .task-hint {
   color: var(--muted);
-  font-size: 13.5px;
-  margin-bottom: 20px;
+  font-size: 14px;
+  margin-bottom: 22px;
 }
 .gaze-dot {
   position: absolute;
@@ -650,7 +822,7 @@ p {
   height: 18px;
   margin: -9px 0 0 -9px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, #ffb8a4 55%, transparent);
   border: 2px solid color-mix(in srgb, #fdf4e7 90%, transparent);
   pointer-events: none;
   will-change: transform;
@@ -662,13 +834,20 @@ p {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 22px;
+  margin-bottom: 24px;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--rule);
 }
 .results-header h1 {
-  font-size: clamp(21px, 2.4vw, 26px);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(22px, 3vw, 32px);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  color: var(--strong);
+  margin: 0;
   flex: 1;
+  max-width: none;
 }
 .results-layout {
   display: grid;
@@ -757,7 +936,7 @@ p {
   gap: 12px;
   padding: 7px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--strong);
   font-variant-numeric: tabular-nums;
 }
@@ -781,7 +960,7 @@ p {
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
   margin-top: 8px;
   font-variant-numeric: tabular-nums;
 }
@@ -808,7 +987,7 @@ p {
   border-radius: 4px;
   color: var(--strong);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   padding: 3px 5px;
   width: 100%;
   min-width: 60px;
@@ -830,7 +1009,7 @@ p {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .recording-list li {
   display: flex;
@@ -844,9 +1023,7 @@ p {
   font-size: 12px;
 }
 
-/* --- AOIs ------------------------------------------------------------- */
-/* Regions are drawn over a stimulus that is usually pale, so they hold the
-   deep teal from the site's light ground rather than the peach. */
+/* --- Regions ---------------------------------------------------------- */
 
 .aoi-layer {
   position: absolute;
@@ -914,10 +1091,6 @@ p {
   }
   .study-thumb {
     width: 100%;
-  }
-  .app-header {
-    flex-direction: column;
-    gap: 14px;
   }
 }
 

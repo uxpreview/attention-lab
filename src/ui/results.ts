@@ -86,7 +86,9 @@ export async function renderResults(
     el("span", { class: "pill" }, `${recordings.length} recording${recordings.length === 1 ? "" : "s"}`)
   );
 
-  host.append(header, layout);
+  // The results screen sits on the same measure as the experiment page around
+  // it; .container is the site's shell.
+  host.append(el("div", { class: "container screen" }, header, layout));
 
   if (recordings.length === 0) {
     sidebar.append(
