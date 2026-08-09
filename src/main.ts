@@ -1,6 +1,7 @@
 import "./styles.css";
 
 import { deleteStudy, listStudies, newId, saveStudy } from "./data/store";
+import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
 import { GazeEngine } from "./tracker/gaze";
 import { deserialiseModel, serialiseModel } from "./tracker/regression";
@@ -421,33 +422,6 @@ function field(label: string, input: HTMLElement): HTMLElement {
   return el("label", { class: "field" }, el("span", {}, label), input);
 }
 
-/** A URL stimulus is loaded into an iframe, and an iframe src without a scheme
- * is a *relative path*: "ryankm.com/lab" resolves against this app's own
- * origin and the participant is shown this site's 404 instead of the page
- * being tested. Nothing about that failure looks like a typo, so the address
- * is resolved and checked here rather than at the point it breaks. */
-function normaliseStimulusUrl(raw: string): { url: string } | { problem: string } {
-  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
-
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return { problem: "That does not look like a web address. Try something like example.com/pricing." };
-  }
-
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return { problem: "Only http and https addresses can be loaded as a stimulus." };
-  }
-  if (parsed.hostname === window.location.hostname) {
-    return { problem: "That is this tool's own address. Point it at the page you want tested." };
-  }
-  if (parsed.protocol === "http:" && window.location.protocol === "https:") {
-    return { problem: "A plain http page cannot be embedded in a secure page. Use https, or test a screenshot instead." };
-  }
-
-  return { url: parsed.toString() };
-}
 
 // Bench notes, in the site's ledger voice: a label rail on the left and the
 // note beside it. Shorter than a /lab/<slug> page's set, because this one has
@@ -505,6 +479,31 @@ function footer(): HTMLElement {
 function stimulusCheck(study: Study): HTMLElement | null {
   if (study.stimulus.kind !== "url") return null;
 
+  // The stored address is checked again here, not just at the form: a study
+  // saved before the form validated anything still has raw text in this
+  // field, and an unchecked iframe src turns that into this app's own 404
+  // dressed up as the participant's page.
+  const resolved = normaliseStimulusUrl(study.stimulus.url);
+  if ("problem" in resolved) {
+    return el(
+      "div",
+      { class: "stimulus-check" },
+      el("p", { class: "label" }, "The page they will see"),
+      el(
+        "p",
+        { class: "note error" },
+        `This study's address (“${study.stimulus.url}”) cannot be loaded. ${resolved.problem} Delete this study and create it again, or run it against a screenshot.`
+      )
+    );
+  }
+
+  // A salvageable address (one that only lacked its scheme) is written back,
+  // so the repair happens once instead of on every render.
+  if (resolved.url !== study.stimulus.url) {
+    study.stimulus.url = resolved.url;
+    void saveStudy(study);
+  }
+
   return el(
     "div",
     { class: "stimulus-check" },
@@ -513,7 +512,7 @@ function stimulusCheck(study: Study): HTMLElement | null {
       "div",
       { class: "stimulus-frame" },
       el("iframe", {
-        src: study.stimulus.url,
+        src: resolved.url,
         title: "Stimulus preview",
         loading: "lazy",
         referrerpolicy: "no-referrer",
@@ -565,7 +564,10 @@ async function runSession(study: Study): Promise<void> {
   app.append(
     el(
       "div",
-      { class: "container screen" },
+      // screen-narrow centres the whole column: the session panel is a single
+      // 620px card, and left-aligning it inside the site's 1840px shell reads
+      // as a mistake rather than a layout. Results keeps the wide shell.
+      { class: "container screen screen-narrow" },
       el(
         "div",
         { class: "screen-head" },
@@ -574,6 +576,18 @@ async function runSession(study: Study): Promise<void> {
       panel
     )
   );
+
+  // stimulusCheck above has already repaired a salvageable stored address; if
+  // the address is still unloadable, running the session would calibrate a
+  // participant and then show them a 404, so the camera never starts.
+  if (study.stimulus.kind === "url" && "problem" in normaliseStimulusUrl(study.stimulus.url)) {
+    status.textContent = "This study's address cannot be loaded, so a session cannot run against it.";
+    status.classList.add("error");
+    // The rest of the session apparatus would only dress up a dead end.
+    panel.querySelector(".camera-preview")?.remove();
+    panel.querySelectorAll(".field, .checkbox").forEach((node) => node.remove());
+    return;
+  }
 
   try {
     await engine.start((message) => {

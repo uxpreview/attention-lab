@@ -78,6 +78,12 @@ label,
 .screen-head {
   margin-bottom: 20px;
 }
+/* The session screen is a single 620px card, so the whole column narrows to
+   the card's measure and centres. .container's own margin: auto does the
+   centring; the head then shares the panel's left edge. */
+.screen-narrow {
+  max-width: calc(620px + 80px);
+}
 
 /* --- Type ------------------------------------------------------------- */
 
@@ -190,14 +196,32 @@ p {
   padding-top: 18px;
   padding-bottom: 18px;
 }
+/* Matches the site header exactly: 20px, 700, -0.02em, and the dot pops in
+   on load the way the site's does. */
 .wordmark {
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 19px;
+  font-weight: 700;
+  font-size: 20px;
   letter-spacing: -0.02em;
   color: var(--strong);
   text-decoration: none;
   white-space: nowrap;
+}
+.wordmark .dot {
+  display: inline-block;
+  transform-origin: 50%;
+  animation: dot-pop 0.36s var(--ease-expo) both;
+}
+@keyframes dot-pop {
+  0% {
+    transform: scale(0);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(1);
+  }
 }
 .bar-back {
   position: relative;
@@ -1246,9 +1270,6 @@ p {
   .bar-inner {
     padding-top: 14px;
     padding-bottom: 14px;
-  }
-  .wordmark {
-    font-size: 17px;
   }
   .note-row {
     padding: 16px 0;
