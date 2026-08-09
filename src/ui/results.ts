@@ -186,6 +186,10 @@ export async function renderResults(
     if (!drawingAoi) return;
     event.preventDefault();
 
+    // Capture the pointer, or a finger that slides off the stage mid-drag
+    // stops sending moves and the region is never finished.
+    aoiLayer.setPointerCapture(event.pointerId);
+
     const bounds = aoiLayer.getBoundingClientRect();
     const startX = (event.clientX - bounds.left) / bounds.width;
     const startY = (event.clientY - bounds.top) / bounds.height;
@@ -204,6 +208,7 @@ export async function renderResults(
     const onUp = (e: PointerEvent) => {
       aoiLayer.removeEventListener("pointermove", onMove);
       aoiLayer.removeEventListener("pointerup", onUp);
+      aoiLayer.removeEventListener("pointercancel", onUp);
       ghost.remove();
 
       const x = (e.clientX - bounds.left) / bounds.width;
@@ -230,6 +235,10 @@ export async function renderResults(
 
     aoiLayer.addEventListener("pointermove", onMove);
     aoiLayer.addEventListener("pointerup", onUp);
+    // A phone call, a notification, or the system taking over the gesture all
+    // cancel the pointer. Treat that as finishing the region rather than
+    // leaving a ghost box on the stage forever.
+    aoiLayer.addEventListener("pointercancel", onUp);
   });
 
   // --- Sidebar -----------------------------------------------------------
