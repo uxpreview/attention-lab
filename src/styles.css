@@ -168,9 +168,9 @@ p {
   color: var(--body-2);
   font-size: 13.5px;
   background: var(--tint);
-  border-left: 2px solid var(--accent);
-  padding: 10px 12px;
-  border-radius: 0 6px 6px 0;
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  border-radius: 8px;
 }
 
 /* --- The experiment page shell ---------------------------------------- */
@@ -622,25 +622,43 @@ p {
   gap: 10px;
   margin-top: 18px;
 }
+/* Calibration quality. The grade is carried by a status dot beside the label,
+   the same device the site uses for an experiment's live state, rather than a
+   colored bar down one edge. The dot sits next to the word it qualifies, so
+   the color is reinforcing a label instead of being the only thing saying it. */
 .accuracy {
   width: 100%;
-  padding: 13px 15px;
+  padding: 14px 16px;
   border-radius: 8px;
   background: var(--tint);
-  border-left: 3px solid var(--muted);
+  border: 1px solid var(--line);
+}
+.accuracy strong {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--strong);
+}
+.accuracy strong::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--muted);
 }
 .accuracy p {
   margin: 4px 0 0;
   font-size: 14px;
 }
-.accuracy-good {
-  border-left-color: var(--signal-good);
+.accuracy-good strong::before {
+  background: var(--signal-good);
 }
-.accuracy-usable {
-  border-left-color: var(--signal-warn);
+.accuracy-usable strong::before {
+  background: var(--signal-warn);
 }
-.accuracy-poor {
-  border-left-color: var(--signal-bad);
+.accuracy-poor strong::before {
+  background: var(--signal-bad);
 }
 
 /* --- The two dark rooms ----------------------------------------------- */
