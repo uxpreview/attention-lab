@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Attention Lab, EXP-038 in the Lab at ryankm.com">
+  <!-- The share card: the same picture the Lab's shelf card runs, held still.
+       A wireframe being read, heat where the eye rested, straight saccades
+       between. Site tokens, no external assets, so it renders anywhere. -->
+  <rect width="1200" height="630" fill="#fef6e9"/>
+
+  <defs>
+    <radialGradient id="heat">
+      <stop offset="0" stop-color="#e73d00" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#e73d00" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- The screen under test -->
+  <g stroke="#e5dac6" stroke-width="2" fill="none">
+    <rect x="620" y="120" width="440" height="390"/>
+    <path d="M660 190 H860"/>
+    <path d="M660 330 H840 M660 358 H800 M660 386 H820"/>
+    <rect x="880" y="220" width="140" height="120"/>
+    <rect x="850" y="420" width="120" height="52"/>
+  </g>
+
+  <!-- Where the eye rested, sized by how long it stayed -->
+  <g>
+    <circle cx="700" cy="190" r="78" fill="url(#heat)"/>
+    <circle cx="950" cy="280" r="96" fill="url(#heat)"/>
+    <circle cx="700" cy="330" r="66" fill="url(#heat)"/>
+    <circle cx="710" cy="386" r="58" fill="url(#heat)"/>
+    <circle cx="910" cy="446" r="104" fill="url(#heat)"/>
+  </g>
+
+  <!-- The scanpath: straight legs, because that is what a saccade is -->
+  <polyline points="700,190 950,280 700,330 710,386 910,446"
+            fill="none" stroke="#003f48" stroke-width="3"/>
+  <circle cx="910" cy="446" r="8" fill="#182528"/>
+
+  <!-- Record voice, then the claim -->
+  <text x="90" y="176" fill="#5f6e73" font-family="Figtree, ui-sans-serif, system-ui, sans-serif"
+        font-size="22" font-weight="500" letter-spacing="2.6">EXP-038 · TOOL · THE LAB</text>
+  <text x="88" y="300" fill="#182528" font-family="Figtree, ui-sans-serif, system-ui, sans-serif"
+        font-size="86" font-weight="800" letter-spacing="-2.6">Attention Lab<tspan fill="#e73d00">.</tspan></text>
+  <text x="90" y="366" fill="#3e4c4e" font-family="Figtree, ui-sans-serif, system-ui, sans-serif"
+        font-size="30" font-weight="400">Webcam eye tracking for wireframes.</text>
+  <text x="90" y="410" fill="#3e4c4e" font-family="Figtree, ui-sans-serif, system-ui, sans-serif"
+        font-size="30" font-weight="400">Nothing leaves the machine it runs on.</text>
+
+  <text x="90" y="540" fill="#5f6e73" font-family="Figtree, ui-sans-serif, system-ui, sans-serif"
+        font-size="22" font-weight="500" letter-spacing="2.6">RYANKM.COM</text>
+</svg>
