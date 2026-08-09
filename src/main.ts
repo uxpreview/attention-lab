@@ -50,13 +50,24 @@ function storeCalibration(value: StoredCalibration | null): void {
 // tokens, same measure. See docs/lab-strategy.md on the site, under
 // "Experiments that live off-site".
 
-const LAB_URL = "https://ryankm.com/lab";
+const SITE_URL = "https://ryankm.com";
+const LAB_URL = `${SITE_URL}/lab`;
 
 function experimentHead(): HTMLElement {
-  const breadcrumb = el(
-    "nav",
-    { class: "brc", "aria-label": "Breadcrumb" },
-    el("div", { class: "container brc-inner" }, el("a", { href: LAB_URL }, "Lab"), el("span", { "aria-hidden": "true" }, "/"), el("span", { "aria-current": "page" }, "Attention Lab"))
+  // A bar rather than a breadcrumb. A breadcrumb is a same-origin device: it
+  // says "you are inside this section", and here the parent link leaves the
+  // origin, so it would be an exit dressed as a way back up. The wordmark and
+  // one route home are honest about being somewhere else, and they give a
+  // visitor who arrived from a search result something to arrive at.
+  const bar = el(
+    "div",
+    { class: "site-bar" },
+    el(
+      "div",
+      { class: "container bar-inner" },
+      el("a", { class: "wordmark", href: SITE_URL }, "Ryan McCarty", el("span", { class: "dot" }, ".")),
+      el("a", { class: "bar-back", href: LAB_URL }, "Back to the Lab", el("span", { "aria-hidden": "true" }, "↗"))
+    )
   );
 
   const meta = el(
@@ -77,7 +88,7 @@ function experimentHead(): HTMLElement {
   return el(
     "header",
     { class: "app-header" },
-    breadcrumb,
+    bar,
     el(
       "div",
       { class: "container exp-head" },
@@ -263,7 +274,12 @@ function newStudyForm(): HTMLElement {
         name: file.name,
       };
     } else {
-      stimulus = { kind: "url", url };
+      const resolved = normaliseStimulusUrl(url);
+      if ("problem" in resolved) {
+        error.textContent = resolved.problem;
+        return;
+      }
+      stimulus = { kind: "url", url: resolved.url };
     }
 
     const study: Study = {
@@ -308,6 +324,34 @@ function newStudyForm(): HTMLElement {
 
 function field(label: string, input: HTMLElement): HTMLElement {
   return el("label", { class: "field" }, el("span", {}, label), input);
+}
+
+/** A URL stimulus is loaded into an iframe, and an iframe src without a scheme
+ * is a *relative path*: "ryankm.com/lab" resolves against this app's own
+ * origin and the participant is shown this site's 404 instead of the page
+ * being tested. Nothing about that failure looks like a typo, so the address
+ * is resolved and checked here rather than at the point it breaks. */
+function normaliseStimulusUrl(raw: string): { url: string } | { problem: string } {
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return { problem: "That does not look like a web address. Try something like example.com/pricing." };
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { problem: "Only http and https addresses can be loaded as a stimulus." };
+  }
+  if (parsed.hostname === window.location.hostname) {
+    return { problem: "That is this tool's own address. Point it at the page you want tested." };
+  }
+  if (parsed.protocol === "http:" && window.location.protocol === "https:") {
+    return { problem: "A plain http page cannot be embedded in a secure page. Use https, or test a screenshot instead." };
+  }
+
+  return { url: parsed.toString() };
 }
 
 // Bench notes, in the site's ledger voice: a label rail on the left and the
@@ -357,6 +401,37 @@ function footer(): HTMLElement {
   );
 }
 
+/** A live page can refuse to be embedded, and a cross-origin frame does not
+ * report that in any way a script can read: it simply arrives empty. Finding
+ * out at the point a participant is already calibrated and looking wastes the
+ * one thing a session cannot get back, which is that person's first pass over
+ * the screen. So the operator sees the framed page here, before anyone is
+ * calibrated, and can decide it is broken with their own eyes. */
+function stimulusCheck(study: Study): HTMLElement | null {
+  if (study.stimulus.kind !== "url") return null;
+
+  return el(
+    "div",
+    { class: "stimulus-check" },
+    el("p", { class: "label" }, "The page they will see"),
+    el(
+      "div",
+      { class: "stimulus-frame" },
+      el("iframe", {
+        src: study.stimulus.url,
+        title: "Stimulus preview",
+        loading: "lazy",
+        referrerpolicy: "no-referrer",
+      })
+    ),
+    el(
+      "p",
+      { class: "note" },
+      "If that box is blank or shows an error, the site refuses to be embedded and no session will work against it. Take a screenshot of the page and run the study against the image instead, which is the more rigorous choice anyway: every participant then sees byte-identical content."
+    )
+  );
+}
+
 // --- Session flow --------------------------------------------------------
 
 async function runSession(study: Study): Promise<void> {
@@ -378,6 +453,7 @@ async function runSession(study: Study): Promise<void> {
     { class: "panel session-panel" },
     el("h2", {}, study.name),
     el("p", { class: "muted" }, study.task || "No task set"),
+    stimulusCheck(study),
     preview,
     status,
     field("Participant label", participantInput),

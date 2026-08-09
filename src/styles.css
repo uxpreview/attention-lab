@@ -175,34 +175,67 @@ p {
 
 /* --- The experiment page shell ---------------------------------------- */
 
-/* The trail every detail page on the site wears: hairline bar, parent left,
-   current page beside it. */
-.brc {
-  border-bottom: 1px solid var(--line);
+/* A bar, not a breadcrumb. A breadcrumb claims same-origin hierarchy, and
+   both links here leave the origin. The wordmark carries the brand where a
+   visitor expects to find it, and the heavy rule under it is the site's
+   section rule rather than a hairline: this is a boundary, not rhythm. */
+.site-bar {
+  border-bottom: 1px solid var(--rule);
 }
-.brc-inner {
+.bar-inner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-top: 14px;
-  padding-bottom: 14px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 18px;
+  padding-bottom: 18px;
 }
-.brc-inner a {
-  color: inherit;
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+  color: var(--strong);
   text-decoration: none;
-  flex-shrink: 0;
-  transition: color 0.2s ease;
+  white-space: nowrap;
 }
-.brc-inner a:hover {
-  color: var(--strong);
+.bar-back {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  text-decoration: none;
+  white-space: nowrap;
 }
-.brc-inner [aria-current] {
-  color: var(--strong);
+.bar-back::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  height: 1.5px;
+  width: 100%;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right center;
+  transition: transform var(--dur-struct) var(--ease-expo);
+}
+.bar-back span {
+  transition: transform 0.2s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .bar-back:hover::after {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+  .bar-back:hover span {
+    transform: translateY(-2px);
+  }
 }
 
 .exp-head {
@@ -601,6 +634,32 @@ p {
 
 .session-panel {
   max-width: 620px;
+}
+
+/* The stimulus preflight: what the participant will actually be shown, seen
+   by the operator before anyone is calibrated. */
+.stimulus-check {
+  margin: 18px 0 4px;
+}
+.stimulus-check .label {
+  margin: 0 0 8px;
+}
+.stimulus-frame {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.stimulus-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+.stimulus-check .note {
+  margin-top: 12px;
 }
 .camera-preview {
   width: 100%;
