@@ -1,19 +1,23 @@
-:root {
-  --bg: #0d0f14;
-  --panel: #151922;
-  --panel-2: #1c212c;
-  --line: #262c38;
-  --text: #e7eaf0;
-  --muted: #949cae;
-  --accent: #4f9dff;
-  --accent-dim: #2c5c99;
-  --good: #35c07a;
-  --warn: #e9b53c;
-  --bad: #ef5f5f;
-  --radius: 10px;
-}
+/* Attention Lab, dressed in the ryankm.com design system.
+ *
+ * Every class name here is the one the TypeScript already writes, so this file
+ * is the whole restyle: no markup was reshaped to fit a look. Colors, radii,
+ * easings and the type scale all come from src/tokens.css, which is a vendored
+ * copy of the site's tokens and is not edited on this side.
+ *
+ * Three site conventions do most of the work:
+ *   the label voice   — 12px, 500, uppercase, 0.12em tracking, muted
+ *   the card recipe   — surface ground, hairline stroke, 12px radius, and a
+ *                       stroke that warms toward the accent on hover. No lift,
+ *                       no shadow, no glow.
+ *   the pill          — 999px radius on anything that reads as a control
+ */
 
-* {
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -22,124 +26,245 @@ body {
   margin: 0;
   padding: 0;
   background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--body);
+  font-family: var(--font-body);
   font-size: 15px;
-  line-height: 1.5;
+  font-weight: 400;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+a,
+button,
+summary,
+label,
+[role="button"] {
+  touch-action: manipulation;
 }
 
 #app {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 28px 24px 64px;
+  padding: 32px 24px 72px;
 }
 
+/* --- Type ------------------------------------------------------------- */
+/* The display register: Figtree, bold and tight, matching the site. */
+
 h1 {
-  font-size: 24px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(26px, 3vw, 34px);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  color: var(--strong);
   margin: 0;
-  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 h2 {
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 19px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--strong);
   margin: 0 0 14px;
 }
+/* h3 is the section label in this app, not a heading in the type scale, so it
+   takes the site's label voice. .study-body h3 opts back out below. */
 h3 {
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
   color: var(--muted);
-  margin: 26px 0 10px;
+  margin: 28px 0 10px;
 }
 h3:first-child {
   margin-top: 0;
 }
 p {
   margin: 0 0 10px;
+  text-wrap: pretty;
 }
 
 .muted {
   color: var(--muted);
 }
 .error {
-  color: var(--bad);
+  color: var(--signal-bad);
   min-height: 20px;
 }
 .note {
-  color: var(--muted);
-  font-size: 13px;
-  background: var(--panel-2);
-  border-left: 2px solid var(--accent-dim);
-  padding: 8px 10px;
+  color: var(--body-2);
+  font-size: 13.5px;
+  background: var(--tint);
+  border-left: 2px solid var(--accent);
+  padding: 10px 12px;
   border-radius: 0 6px 6px 0;
 }
 
+/* --- Frame ------------------------------------------------------------ */
+
 .app-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--rule);
 }
+.app-header p {
+  margin: 6px 0 0;
+}
+
+/* The way back to the section this belongs to. It is the only link on the
+   page that leaves, so it carries the site's chase underline. */
+.back-link {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  text-decoration: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.back-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  height: 1.5px;
+  width: 100%;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right center;
+  transition: transform var(--dur-struct) var(--ease-expo);
+}
+.back-link span[aria-hidden] {
+  transition: transform 0.2s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .back-link:hover::after {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+  .back-link:hover span[aria-hidden] {
+    transform: translateX(-3px);
+  }
+}
+
 .app-footer {
-  margin-top: 40px;
-  padding-top: 18px;
+  margin-top: 48px;
+  padding-top: 20px;
   border-top: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
+}
+.app-footer p {
+  max-width: 68ch;
+}
+.footer-credit {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+.header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+/* The footer credit sits mid-sentence, so it keeps the underline behavior but
+   drops the label voice and the arrow spacing. */
+.back-link-plain {
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline;
 }
 
 .pill {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-weight: 500;
   font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  padding: 6px 14px;
   color: var(--muted);
   white-space: nowrap;
 }
 .pill-quiet {
-  color: var(--good);
-  border-color: rgba(53, 192, 122, 0.3);
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
 /* --- Controls --------------------------------------------------------- */
+/* Pills, mono-labelled, same contract as the site's buttons: the primary is
+   an outline that fills on hover and flips its label to the ground color. */
 
 .btn {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 9px 15px;
-  font: inherit;
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--strong);
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-chip);
+  padding: 11px 22px;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    color 0.2s;
 }
 .btn:hover {
-  background: #232936;
-  border-color: #38404f;
+  border-color: var(--strong);
 }
 .btn-primary {
-  background: var(--accent);
   border-color: var(--accent);
-  color: #07121f;
-  font-weight: 600;
+  color: var(--accent);
 }
 .btn-primary:hover {
-  background: #6aaeff;
-  border-color: #6aaeff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 .btn-ghost {
-  background: transparent;
   border-color: transparent;
   color: var(--muted);
 }
 .btn-ghost:hover {
-  background: var(--panel-2);
-  color: var(--text);
+  border-color: transparent;
+  color: var(--strong);
 }
 .btn-small {
-  padding: 6px 11px;
-  font-size: 13px;
+  padding: 8px 16px;
+  font-size: 11px;
 }
 .btn.is-active {
   border-color: var(--accent);
@@ -151,45 +276,56 @@ p {
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 9px 11px;
-  color: var(--text);
+  padding: 10px 12px;
+  color: var(--strong);
   font: inherit;
   font-size: 14px;
 }
+.input::placeholder {
+  color: var(--muted);
+}
 .input:focus {
   outline: none;
-  border-color: var(--accent-dim);
+  border-color: var(--accent);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 .field > span {
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-  margin: 16px 0;
+  gap: 16px;
+  margin: 18px 0;
 }
 .checkbox {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 13px;
-  color: var(--muted);
-  margin: 12px 0;
+  font-size: 13.5px;
+  color: var(--body-2);
+  margin: 14px 0;
+}
+.checkbox input {
+  accent-color: var(--accent);
 }
 
+/* The card recipe. */
 .panel {
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 20px;
+  border-radius: var(--r-card);
+  padding: 22px;
   margin-bottom: 28px;
 }
 
@@ -200,23 +336,27 @@ p {
   justify-content: center;
   gap: 4px;
   border: 1.5px dashed var(--line);
-  border-radius: var(--radius);
-  padding: 30px;
+  border-radius: var(--r-card);
+  padding: 32px;
   cursor: pointer;
   text-align: center;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease;
 }
 .drop-zone:hover,
 .drop-zone.is-over {
-  border-color: var(--accent-dim);
-  background: rgba(79, 157, 255, 0.05);
+  border-color: var(--accent);
+  background: var(--tint);
 }
 .drop-zone.has-file {
   border-style: solid;
-  border-color: var(--good);
+  border-color: color-mix(in srgb, var(--signal-good) 70%, var(--line));
 }
 .drop-title {
+  font-family: var(--font-display);
   font-weight: 600;
+  color: var(--strong);
 }
 .file-input {
   display: none;
@@ -233,17 +373,24 @@ p {
   grid-template-columns: 96px 1fr auto;
   gap: 18px;
   align-items: center;
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px;
+  border-radius: var(--r-card);
+  padding: 16px;
+  transition: border-color 0.25s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .study-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  }
 }
 .study-thumb {
   width: 96px;
   height: 68px;
   border-radius: 6px;
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--tint);
+  border: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -254,25 +401,35 @@ p {
   object-fit: cover;
 }
 .study-thumb-url {
+  font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 500;
   color: var(--muted);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
 }
+/* A study title is a card headline, not a section label, so it leaves the
+   label voice and rejoins the display register. */
 .study-body h3 {
+  font-family: var(--font-display);
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
   text-transform: none;
-  letter-spacing: normal;
-  color: var(--text);
+  color: var(--strong);
 }
 .study-body p {
   margin: 0;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 .study-meta {
+  font-family: var(--font-mono);
   color: var(--muted);
   font-size: 12px !important;
-  margin-top: 4px !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 6px !important;
 }
 .study-actions {
   display: flex;
@@ -282,9 +439,9 @@ p {
 
 .empty {
   text-align: center;
-  padding: 48px 20px;
+  padding: 52px 20px;
   border: 1px dashed var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--r-card);
 }
 
 /* --- Session ---------------------------------------------------------- */
@@ -296,9 +453,10 @@ p {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
+  border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
-  margin: 14px 0;
+  margin: 16px 0;
 }
 .camera-preview video {
   width: 100%;
@@ -309,35 +467,38 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 .accuracy {
   width: 100%;
-  padding: 12px 14px;
+  padding: 13px 15px;
   border-radius: 8px;
-  background: var(--panel-2);
+  background: var(--tint);
   border-left: 3px solid var(--muted);
 }
 .accuracy p {
   margin: 4px 0 0;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 .accuracy-good {
-  border-left-color: var(--good);
+  border-left-color: var(--signal-good);
 }
 .accuracy-usable {
-  border-left-color: var(--warn);
+  border-left-color: var(--signal-warn);
 }
 .accuracy-poor {
-  border-left-color: var(--bad);
+  border-left-color: var(--signal-bad);
 }
 
 /* --- Calibration ------------------------------------------------------ */
+/* The overlay is the one place the ground goes darker than the page: a
+   calibration dot has to be the brightest thing on the screen or the eye
+   never commits to it. */
 
 .calib-overlay {
   position: fixed;
   inset: 0;
-  background: #0b0d12;
+  background: #002b31;
   z-index: 900;
 }
 .calib-instruction {
@@ -350,12 +511,16 @@ p {
   transition: opacity 0.4s ease;
   pointer-events: none;
 }
-.calib-instruction.is-dim {
-  opacity: 0;
-}
 .calib-progress {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.calib-instruction.is-dim {
+  opacity: 0;
 }
 .calib-dot {
   position: absolute;
@@ -364,24 +529,24 @@ p {
   margin: -13px 0 0 -13px;
   border-radius: 50%;
   background: var(--accent);
-  border: 3px solid #fff;
+  border: 3px solid #fdf4e7;
   padding: 0;
   cursor: pointer;
-  box-shadow: 0 0 0 6px rgba(79, 157, 255, 0.18);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
   animation: pulse 1.4s ease-in-out infinite;
 }
 .calib-dot.is-active {
   animation: none;
-  background: var(--good);
-  box-shadow: 0 0 0 10px rgba(53, 192, 122, 0.2);
+  background: var(--signal-good);
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--signal-good) 20%, transparent);
 }
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 6px rgba(79, 157, 255, 0.18);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 14px rgba(79, 157, 255, 0.06);
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--accent) 6%, transparent);
   }
 }
 
@@ -390,7 +555,7 @@ p {
 .record-stage {
   position: fixed;
   inset: 0;
-  background: #0b0d12;
+  background: #002b31;
   z-index: 900;
   display: flex;
   align-items: center;
@@ -436,16 +601,19 @@ p {
   bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 12px;
-  color: var(--muted);
-  background: rgba(0, 0, 0, 0.6);
-  padding: 5px 12px;
-  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--body-2);
+  background: color-mix(in srgb, #002b31 80%, transparent);
+  padding: 6px 14px;
+  border-radius: var(--r-chip);
 }
 .task-prompt {
   position: absolute;
   inset: 0;
-  background: rgba(11, 13, 18, 0.97);
+  background: color-mix(in srgb, #002b31 97%, transparent);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -455,11 +623,14 @@ p {
   gap: 6px;
 }
 .task-prompt h2 {
-  font-size: 26px;
+  font-size: clamp(24px, 3.4vw, 32px);
+  line-height: 1.15;
   max-width: 640px;
-  margin: 6px 0 12px;
+  margin: 8px 0 14px;
 }
 .task-label {
+  font-family: var(--font-mono);
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 12px;
@@ -468,8 +639,8 @@ p {
 }
 .task-hint {
   color: var(--muted);
-  font-size: 13px;
-  margin-bottom: 18px;
+  font-size: 13.5px;
+  margin-bottom: 20px;
 }
 .gaze-dot {
   position: absolute;
@@ -479,8 +650,8 @@ p {
   height: 18px;
   margin: -9px 0 0 -9px;
   border-radius: 50%;
-  background: rgba(79, 157, 255, 0.55);
-  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border: 2px solid color-mix(in srgb, #fdf4e7 90%, transparent);
   pointer-events: none;
   will-change: transform;
 }
@@ -491,10 +662,12 @@ p {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
 }
 .results-header h1 {
-  font-size: 20px;
+  font-size: clamp(21px, 2.4vw, 26px);
   flex: 1;
 }
 .results-layout {
@@ -508,9 +681,9 @@ p {
 }
 .results-stage {
   position: relative;
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--r-card);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -537,10 +710,10 @@ p {
   word-break: break-all;
 }
 .results-sidebar {
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 18px;
+  border-radius: var(--r-card);
+  padding: 20px;
   max-height: 84vh;
   overflow-y: auto;
 }
@@ -552,31 +725,47 @@ p {
 }
 .seg {
   flex: 1 1 auto;
-  background: var(--panel-2);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: transparent;
   border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 7px 10px;
-  font: inherit;
-  font-size: 13px;
+  border-radius: var(--r-chip);
+  padding: 8px 12px;
   color: var(--muted);
   cursor: pointer;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    color 0.2s;
+}
+.seg:hover {
+  color: var(--strong);
+  border-color: var(--strong);
 }
 .seg.is-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #07121f;
-  font-weight: 600;
+  color: var(--accent-contrast);
 }
 
 .stat-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 0;
+  padding: 7px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 13.5px;
+  color: var(--strong);
+  font-variant-numeric: tabular-nums;
 }
 .stat-row span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 .row-between {
@@ -592,29 +781,35 @@ p {
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 12.5px;
   margin-top: 8px;
+  font-variant-numeric: tabular-nums;
 }
 .data-table th {
   text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--muted);
   font-weight: 500;
-  padding: 5px 4px;
+  padding: 6px 4px;
   border-bottom: 1px solid var(--line);
 }
 .data-table td {
-  padding: 6px 4px;
+  padding: 7px 4px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
+  color: var(--body);
 }
 .inline-input {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--text);
+  color: var(--strong);
   font: inherit;
-  font-size: 12px;
-  padding: 2px 4px;
+  font-size: 12.5px;
+  padding: 3px 5px;
   width: 100%;
   min-width: 60px;
 }
@@ -623,7 +818,7 @@ p {
 }
 .inline-input:focus {
   outline: none;
-  border-color: var(--accent-dim);
+  border-color: var(--accent);
 }
 
 .button-grid {
@@ -635,14 +830,14 @@ p {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 .recording-list li {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 7px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
 .recording-list .muted {
@@ -650,6 +845,8 @@ p {
 }
 
 /* --- AOIs ------------------------------------------------------------- */
+/* Regions are drawn over a stimulus that is usually pale, so they hold the
+   deep teal from the site's light ground rather than the peach. */
 
 .aoi-layer {
   position: absolute;
@@ -661,8 +858,8 @@ p {
 }
 .aoi-box {
   position: absolute;
-  border: 1.5px solid rgba(79, 157, 255, 0.9);
-  background: rgba(79, 157, 255, 0.08);
+  border: 1.5px solid #003f48;
+  background: color-mix(in srgb, #003f48 10%, transparent);
   border-radius: 3px;
   pointer-events: auto;
 }
@@ -672,13 +869,16 @@ p {
 }
 .aoi-label {
   position: absolute;
-  top: -20px;
+  top: -21px;
   left: -1px;
-  background: rgba(79, 157, 255, 0.9);
-  color: #07121f;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
+  background: #003f48;
+  color: #fef6e9;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
   border-radius: 3px;
   white-space: nowrap;
 }
@@ -690,19 +890,19 @@ p {
   height: 18px;
   border-radius: 50%;
   border: 0;
-  background: #0b0d12;
-  color: var(--muted);
+  background: #003f48;
+  color: #fef6e9;
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.2s ease;
 }
 .aoi-box:hover .aoi-remove {
   opacity: 1;
 }
 .aoi-remove:hover {
-  color: var(--bad);
+  background: #bf3400;
 }
 
 @media (max-width: 900px) {
@@ -714,5 +914,20 @@ p {
   }
   .study-thumb {
     width: 100%;
+  }
+  .app-header {
+    flex-direction: column;
+    gap: 14px;
+  }
+}
+
+/* The site neutralizes every transition under reduced motion; so does this. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

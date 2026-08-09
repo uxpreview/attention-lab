@@ -62,7 +62,20 @@ async function showStudyList(): Promise<void> {
       el("h1", {}, "Attention Lab"),
       el("p", { class: "muted" }, "Webcam eye tracking for wireframes and live pages")
     ),
-    el("span", { class: "pill pill-quiet" }, "Everything stays in this browser")
+    el(
+      "div",
+      { class: "header-side" },
+      el("span", { class: "pill pill-quiet" }, "Everything stays in this browser"),
+      // The way back to the section this belongs to. It is EXP-038 in the Lab
+      // on ryankm.com, and a tool sitting on its own subdomain with no route
+      // home reads like something abandoned there.
+      el(
+        "a",
+        { class: "back-link", href: "https://ryankm.com/lab" },
+        el("span", { "aria-hidden": "true" }, "←"),
+        "EXP-038 in the Lab"
+      )
+    )
   );
 
   const list = el("section", { class: "study-list" });
@@ -261,7 +274,13 @@ function footer(): HTMLElement {
     el(
       "p",
       { class: "muted" },
-      "Webcam gaze estimation is approximate — expect 2-4° of error, enough to tell which block someone read, not which word. No video ever leaves this device."
+      "Webcam gaze estimation is approximate. Expect 2-4° of error, enough to tell which block someone read, not which word. No video ever leaves this device."
+    ),
+    el(
+      "p",
+      { class: "muted footer-credit" },
+      "An experiment from the Lab at ",
+      el("a", { class: "back-link back-link-plain", href: "https://ryankm.com/lab" }, "ryankm.com")
     )
   );
 }
@@ -294,7 +313,7 @@ async function runSession(study: Study): Promise<void> {
       "label",
       { class: "checkbox" },
       gazeDotToggle,
-      el("span", {}, "Show live gaze dot (demo mode — distracting for real studies)")
+      el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
     ),
     el("div", { class: "session-actions" })
   );
@@ -326,7 +345,7 @@ async function runSession(study: Study): Promise<void> {
 
   const unsubscribe = engine.onStatus((s) => {
     if (!s.faceVisible) {
-      status.textContent = "No face detected — check your lighting and framing.";
+      status.textContent = "No face detected. Check your lighting and framing.";
     } else if (!s.usable) {
       status.textContent = "Face detected, but turned too far or too close to the edge of frame.";
     } else {

@@ -143,7 +143,7 @@ function showTaskPrompt(chrome: HTMLElement, study: Study): Promise<boolean> {
           ? `Recording stops automatically after ${study.duration} seconds.`
           : "Press space again when you are done."
       ),
-      el("button", { class: "btn btn-primary", type: "button" }, "Start — or press space")
+      el("button", { class: "btn btn-primary", type: "button" }, "Start, or press space")
     );
 
     const start = () => {

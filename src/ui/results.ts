@@ -294,7 +294,7 @@ export async function renderResults(
         el(
           "p",
           { class: "note" },
-          `Scanpaths are per-person. Showing ${analysed[0].recording.participant} — pick a participant to see others.`
+          `Scanpaths are per-person. Showing ${analysed[0].recording.participant}. Pick a participant to see others.`
         )
       );
     }
