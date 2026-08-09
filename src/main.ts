@@ -53,6 +53,27 @@ function storeCalibration(value: StoredCalibration | null): void {
 const SITE_URL = "https://ryankm.com";
 const LAB_URL = `${SITE_URL}/lab`;
 
+/** A phone cannot run a session, and the honest thing is to say so rather than
+ * let someone spend a participant finding out.
+ *
+ * Three reasons, none of them fixable by design. The camera is a hand's length
+ * from the face and off to one side, so the iris is a few pixels across and
+ * the head pose estimate is working from almost nothing. Calibration asks you
+ * to look at a point and tap it, and on a handheld your thumb covers the point
+ * and your arm moves the camera in the same motion. And a screen this size
+ * cannot show a desktop stimulus at a size anyone can read, so the task itself
+ * stops being the task.
+ *
+ * Reading the page and looking at results a session already produced are fine,
+ * and stay available. */
+function isHandheld(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(pointer: coarse)").matches &&
+    Math.min(window.innerWidth, window.innerHeight) < 820
+  );
+}
+
 function experimentHead(): HTMLElement {
   // A bar rather than a breadcrumb. A breadcrumb is a same-origin device: it
   // says "you are inside this section", and here the parent link leaves the
@@ -124,7 +145,13 @@ async function showStudyList(): Promise<void> {
         "div",
         { class: "empty" },
         el("h3", {}, "No studies yet"),
-        el("p", { class: "muted" }, "Add a wireframe or a URL to start collecting attention data.")
+        el(
+          "p",
+          { class: "muted" },
+          isHandheld()
+            ? "Nothing has been recorded in this browser. Results of a session run on another machine stay on that machine."
+            : "Add a wireframe or a URL to start collecting attention data."
+        )
       )
     );
   } else {
@@ -138,10 +165,64 @@ async function showStudyList(): Promise<void> {
   const body = el(
     "section",
     { class: "exp-body" },
-    el("div", { class: "container" }, newStudyForm(), list)
+    // No setup form on a handheld. A study lives in the storage of the browser
+    // it was made in, so one built on a phone could never be opened on the
+    // machine that could run it: the form would only ever waste someone's
+    // time. The notice above says so rather than leaving a hole.
+    el(
+      "div",
+      { class: "container" },
+      handheldNotice(),
+      isHandheld() ? null : newStudyForm(),
+      list
+    )
   );
 
   app.append(header, body, footer());
+}
+
+/** Said once, at the top, before anyone builds a study they cannot run. */
+function handheldNotice(): HTMLElement | null {
+  if (!isHandheld()) return null;
+
+  const copy = el(
+    "button",
+    { class: "btn btn-small", type: "button" },
+    "Copy the link"
+  );
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      copy.textContent = "Copied";
+      setTimeout(() => (copy.textContent = "Copy the link"), 2000);
+    } catch {
+      // Clipboard access is refused in plenty of ordinary situations. Select
+      // the address instead of pretending nothing happened.
+      copy.textContent = "Copy from the address bar";
+    }
+  });
+
+  return el(
+    "aside",
+    { class: "panel handheld" },
+    el("p", { class: "label eyebrow" }, "Read here, run it on a desktop"),
+    el(
+      "p",
+      { class: "handheld-body" },
+      "Sessions need a laptop or a desktop. A phone camera sits a hand's length from your face and off to one side, so the iris is a few pixels across; calibration asks you to look at a point and tap it, which puts your thumb over the point and moves the camera at the same time; and a screen this size cannot show a desktop stimulus at a size anyone could actually read. The numbers would come out looking exactly like real ones."
+    ),
+    el(
+      "p",
+      { class: "handheld-body" },
+      "Setting one up is not offered here either, and that is the reason rather than tidiness: studies live in the storage of the browser they were made in, so one built on this phone could never be opened on the machine that could run it."
+    ),
+    el(
+      "p",
+      { class: "handheld-body" },
+      "Everything else works. Read the page, and open the results of any session already recorded in this browser."
+    ),
+    el("div", { class: "handheld-actions" }, copy)
+  );
 }
 
 function studyCard(study: Study): HTMLElement {
@@ -177,11 +258,25 @@ function studyCard(study: Study): HTMLElement {
     el(
       "div",
       { class: "study-actions" },
-      el(
-        "button",
-        { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
-        "Run session"
-      ),
+      // On a handheld the run button is disabled rather than hidden: a control
+      // that vanishes leaves you wondering whether the tool is broken, and the
+      // notice above the list has already given the reason.
+      isHandheld()
+        ? el(
+            "button",
+            {
+              class: "btn btn-primary",
+              type: "button",
+              disabled: true,
+              title: "Sessions need a laptop or a desktop",
+            },
+            "Run session"
+          )
+        : el(
+            "button",
+            { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
+            "Run session"
+          ),
       el(
         "button",
         {

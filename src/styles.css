@@ -1109,6 +1109,9 @@ p {
 .aoi-layer.is-drawing {
   pointer-events: auto;
   cursor: crosshair;
+  /* Without this a drag across the stage scrolls the page instead of drawing
+     a region, which is the entire interaction on a touch screen. */
+  touch-action: none;
 }
 .aoi-box {
   position: absolute;
@@ -1159,6 +1162,31 @@ p {
   background: #bf3400;
 }
 
+/* --- Handheld --------------------------------------------------------- */
+
+.handheld {
+  background: var(--tint);
+}
+.handheld-body {
+  max-width: 62ch;
+  color: var(--body);
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+.handheld-body:last-of-type {
+  margin-bottom: 0;
+}
+.handheld-actions {
+  margin-top: 18px;
+}
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn[disabled]:hover {
+  border-color: var(--accent);
+}
+
 @media (max-width: 900px) {
   .results-layout {
     grid-template-columns: 1fr;
@@ -1168,6 +1196,62 @@ p {
   }
   .study-thumb {
     width: 100%;
+    height: 120px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Controls go full width and gain height: a 12px tracked label in a pill is
+     a small target, and at this width there is no reason to keep them inline
+     beside each other. */
+  .study-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+  .study-actions .btn-ghost {
+    grid-column: 1 / -1;
+  }
+  .btn {
+    padding: 15px 20px;
+  }
+  .btn-small {
+    padding: 11px 16px;
+  }
+  .panel .btn-primary {
+    width: 100%;
+  }
+  .session-actions .btn {
+    flex: 1 1 100%;
+  }
+  /* The checkbox aligns to the first line of its label rather than centring
+     against a wrapped two-line one. */
+  .checkbox {
+    align-items: flex-start;
+  }
+  .checkbox input {
+    margin-top: 3px;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  /* iOS zooms the page when a focused input is under 16px. */
+  .input {
+    font-size: 16px;
+  }
+  .exp-head {
+    padding-top: 32px;
+  }
+  .bar-inner {
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+  .wordmark {
+    font-size: 17px;
+  }
+  .note-row {
+    padding: 16px 0;
   }
 }
 
