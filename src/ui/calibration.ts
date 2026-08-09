@@ -52,7 +52,7 @@ export async function runCalibration(
     el(
       "p",
       {},
-      "Keep your head still and your face lit from the front. Look at each dot and click it — keep looking until it stops pulsing."
+      "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until it stops pulsing."
     ),
     el("p", { class: "calib-progress" }, `0 / ${CALIBRATION_POINTS.length}`)
   );
@@ -225,20 +225,20 @@ export function describeAccuracy(errorPx: number | null): {
   if (degrees < 2) {
     return {
       grade: "good",
-      label: `Good — ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
+      label: `Good: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
       detail: "Reliable enough for region-level conclusions on a wireframe.",
     };
   }
   if (degrees < 4) {
     return {
       grade: "usable",
-      label: `Usable — ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
+      label: `Usable: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
       detail: "Good for big blocks. Do not read individual words or small links from this.",
     };
   }
   return {
     grade: "poor",
-    label: `Poor — ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
+    label: `Poor: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
     detail: "Recalibrate: improve lighting, sit square to the screen, and stay still.",
   };
 }

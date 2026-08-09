@@ -42,6 +42,56 @@ function storeCalibration(value: StoredCalibration | null): void {
   }
 }
 
+// --- The experiment page shell -------------------------------------------
+// This tool is EXP-038 in the Lab on ryankm.com and it is hosted here rather
+// than there, so the page has to do the work the site's /lab/<slug> route
+// normally does: the trail back up, the record voice (number, kind, state,
+// then the stack), the claim in display type, and the lede. Same order, same
+// tokens, same measure. See docs/lab-strategy.md on the site, under
+// "Experiments that live off-site".
+
+const LAB_URL = "https://ryankm.com/lab";
+
+function experimentHead(): HTMLElement {
+  const breadcrumb = el(
+    "nav",
+    { class: "brc", "aria-label": "Breadcrumb" },
+    el("div", { class: "container brc-inner" }, el("a", { href: LAB_URL }, "Lab"), el("span", { "aria-hidden": "true" }, "/"), el("span", { "aria-current": "page" }, "Attention Lab"))
+  );
+
+  const meta = el(
+    "div",
+    { class: "exp-meta" },
+    el("span", { class: "label label-strong" }, "EXP-038"),
+    el("span", { class: "label" }, "tool"),
+    el(
+      "span",
+      { class: "label label-strong exp-state" },
+      el("span", { class: "status-dot", "aria-hidden": "true" }),
+      "Live"
+    ),
+    el("span", { class: "exp-rule", "aria-hidden": "true" }),
+    el("span", { class: "label exp-stack" }, "MediaPipe · Ridge regression · Client-side only")
+  );
+
+  return el(
+    "header",
+    { class: "app-header" },
+    breadcrumb,
+    el(
+      "div",
+      { class: "container exp-head" },
+      meta,
+      el("h1", { class: "t-h1" }, "Attention Lab", el("span", { class: "dot" }, ".")),
+      el(
+        "p",
+        { class: "t-lede" },
+        "Point a webcam at a wireframe and find out where people actually look. Upload a screen, give someone a task, and this rebuilds their gaze from the iris after thirteen calibration clicks, then hands back a heatmap, a scanpath, and attention numbers per region. Accurate to a block rather than a word, which is the honest limit of doing this without a lab rig, and enough to settle most arguments about hierarchy."
+      )
+    )
+  );
+}
+
 // --- Study list ----------------------------------------------------------
 
 async function showStudyList(): Promise<void> {
@@ -53,17 +103,7 @@ async function showStudyList(): Promise<void> {
   clear(app);
   const studies = await listStudies();
 
-  const header = el(
-    "header",
-    { class: "app-header" },
-    el(
-      "div",
-      {},
-      el("h1", {}, "Attention Lab"),
-      el("p", { class: "muted" }, "Webcam eye tracking for wireframes and live pages")
-    ),
-    el("span", { class: "pill pill-quiet" }, "Everything stays in this browser")
-  );
+  const header = experimentHead();
 
   const list = el("section", { class: "study-list" });
 
@@ -82,7 +122,15 @@ async function showStudyList(): Promise<void> {
     }
   }
 
-  app.append(header, newStudyForm(), list, footer());
+  // The tool sits inside the page the way an experiment sits inside a
+  // /lab/<slug> route: its own section, on the same measure as the head.
+  const body = el(
+    "section",
+    { class: "exp-body" },
+    el("div", { class: "container" }, newStudyForm(), list)
+  );
+
+  app.append(header, body, footer());
 }
 
 function studyCard(study: Study): HTMLElement {
@@ -235,7 +283,15 @@ function newStudyForm(): HTMLElement {
   return el(
     "section",
     { class: "panel" },
-    el("h2", {}, "New study"),
+    // The panel opens the way an experiment opens on the site: eyebrow, then
+    // the claim in display type, then how to work it.
+    el("p", { class: "label eyebrow" }, "Upload · Task · Thirteen clicks"),
+    el("h2", { class: "t-display" }, "See where they actually looked."),
+    el(
+      "p",
+      { class: "panel-lede" },
+      "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser. Nothing you upload and no frame of video ever leaves this machine."
+    ),
     dropZone,
     el(
       "div",
@@ -254,14 +310,49 @@ function field(label: string, input: HTMLElement): HTMLElement {
   return el("label", { class: "field" }, el("span", {}, label), input);
 }
 
+// Bench notes, in the site's ledger voice: a label rail on the left and the
+// note beside it. Shorter than a /lab/<slug> page's set, because this one has
+// to earn its space above a working tool rather than below a finished one.
+const BENCH_NOTES: { k: string; v: string }[] = [
+  {
+    k: "What the error means",
+    v: "Expect 2 to 4 degrees of visual angle, which is 50 to 120 pixels at a normal viewing distance. That is enough to tell you which block someone read and never enough to tell you which word. Every number this gives you should be read at the size of a component, not a line of copy.",
+  },
+  {
+    k: "Calibrate every participant",
+    v: "Calibration is per person and per seating position, and it is cached for one sitting only. A stale calibration does not announce itself: it just quietly returns gaze that is wrong by a consistent amount, which looks exactly like data.",
+  },
+  {
+    k: "Give a real task",
+    v: "A free-viewing heatmap mostly shows you where the biggest image is. A task-driven one shows you whether the interface works. The task is the part of the setup that decides whether the output is worth anything.",
+  },
+  {
+    k: "It stays on this machine",
+    v: "The camera feed is read frame by frame in the page and never recorded or sent anywhere. Studies and recordings live in this browser's own storage. There is no server, which is also why clearing site data deletes everything.",
+  },
+];
+
 function footer(): HTMLElement {
+  const notes = el("dl", { class: "notes" });
+  for (const note of BENCH_NOTES) {
+    notes.append(
+      el("div", { class: "note-row" }, el("dt", { class: "label" }, note.k), el("dd", {}, note.v))
+    );
+  }
+
   return el(
     "footer",
     { class: "app-footer" },
     el(
-      "p",
-      { class: "muted" },
-      "Webcam gaze estimation is approximate — expect 2-4° of error, enough to tell which block someone read, not which word. No video ever leaves this device."
+      "div",
+      { class: "container" },
+      el("h2", { class: "t-display notes-title" }, "Bench notes"),
+      notes,
+      el(
+        "p",
+        { class: "footer-credit" },
+        el("a", { class: "arrow-link", href: LAB_URL }, "EXP-038 in the Lab at ryankm.com", el("span", { "aria-hidden": "true" }, "→"))
+      )
     )
   );
 }
@@ -294,7 +385,7 @@ async function runSession(study: Study): Promise<void> {
       "label",
       { class: "checkbox" },
       gazeDotToggle,
-      el("span", {}, "Show live gaze dot (demo mode — distracting for real studies)")
+      el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
     ),
     el("div", { class: "session-actions" })
   );
@@ -302,11 +393,15 @@ async function runSession(study: Study): Promise<void> {
   const actions = panel.querySelector(".session-actions") as HTMLElement;
   app.append(
     el(
-      "header",
-      { class: "app-header" },
-      el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "← Studies")
-    ),
-    panel
+      "div",
+      { class: "container screen" },
+      el(
+        "div",
+        { class: "screen-head" },
+        el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "← Studies")
+      ),
+      panel
+    )
   );
 
   try {
@@ -326,7 +421,7 @@ async function runSession(study: Study): Promise<void> {
 
   const unsubscribe = engine.onStatus((s) => {
     if (!s.faceVisible) {
-      status.textContent = "No face detected — check your lighting and framing.";
+      status.textContent = "No face detected. Check your lighting and framing.";
     } else if (!s.usable) {
       status.textContent = "Face detected, but turned too far or too close to the edge of frame.";
     } else {
