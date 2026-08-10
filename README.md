@@ -81,7 +81,9 @@ rendered empty; what is verified and what is not; and what is still open.
 
 - **Heatmap** — dwell-weighted attention, scaled to a high percentile of the
   per-blob peaks rather than of the pixels, so one long stare saturates without
-  flattening every other cluster into the cold end of the ramp.
+  flattening every other cluster into the clear end of the ramp. The ramp
+  itself starts fully transparent: a region nobody fixated is left unpainted
+  rather than tinted a cold colour that reads as attention it never got.
 - **Spotlight** — the inverse: dims what was ignored. Usually the more
   persuasive version in a readout.
 - **Contours** — banded isolines, easier to cite exact regions from.

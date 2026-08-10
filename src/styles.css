@@ -9,7 +9,13 @@
  * copy of the site's tokens that is never edited on this side.
  *
  * The site's conventions doing most of the work here:
- *   the label voice   — 12px, 500, uppercase, 0.12em tracking, muted
+ *   the label voice   — 12px, 500, uppercase, 0.12em tracking, muted.
+ *                       Structural eyebrows only: the record line (EXP-038,
+ *                       the stack), section headings, the trail back, and the
+ *                       one badge that has to read as a stamp. Buttons, chips,
+ *                       stat labels, field labels and table headers are
+ *                       sentence case at 13px — the voice stops being a voice
+ *                       when everything on the screen is speaking in it
  *   the card recipe   — surface ground, hairline stroke, 12px radius, stroke
  *                       warms toward the accent on hover. No lift, no shadow
  *   the chase line    — underlines draw in from the left, exit right
@@ -426,10 +432,9 @@ p {
    patch of tint you cannot. */
 .pill {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.005em;
   background: var(--tint);
   border: 1px solid var(--line);
   border-radius: var(--r-chip);
@@ -443,15 +448,23 @@ p {
 }
 
 /* --- Controls --------------------------------------------------------- */
-/* Pills, mono-labelled. The primary is an ink outline that fills on hover and
-   flips its label to the ground color, same contract as the site's buttons. */
+/* Pills. The primary is an ink outline that fills on hover and flips its label
+   to the ground color, same contract as the site's buttons.
+ *
+ * Sentence case at 13px, not tracked uppercase at 12px. The label voice is for
+ * structural eyebrows — EXP-038, the stack line, SUMMARY — and it was being
+ * spent on every button, chip, table header and stat label in the app: on the
+ * results screen alone that was five stat labels, five view chips, four table
+ * headers, an export button and a Delete per row, all shouting at once, which
+ * is the same as none of them shouting. Uppercase at 11-12px is also measurably
+ * slower to read, and a button label is a thing you read to decide what to
+ * press. The weight goes up to hold the presence the tracking was providing. */
 
 .btn {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.005em;
   background: transparent;
   color: var(--strong);
   /* The hairline alone is ~1.2:1 on cream — far under the 3:1 non-text
@@ -496,7 +509,7 @@ p {
 }
 .btn-small {
   padding: 8px 16px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .btn.is-active {
   border-color: var(--accent);
@@ -586,10 +599,9 @@ p {
   position: absolute;
   right: 13px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
   pointer-events: none;
 }
@@ -609,13 +621,14 @@ p {
   flex-direction: column;
   gap: 7px;
 }
+/* A field label names the thing you are about to type into; sentence case is
+   how the rest of the world writes one. */
 .field > span {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13.5px;
+  letter-spacing: 0;
+  color: var(--body-2);
 }
 /* The special case, under the field it qualifies, in sentence case — where a
    parenthetical actually reads. */
@@ -689,7 +702,49 @@ p {
   .setup-panel {
     grid-template-columns: minmax(300px, 36%) minmax(0, 1fr);
     gap: 56px;
+    /* The two columns are different heights by nature — a lede against a drop
+       zone, four fields and a submit — and the copy column now has something to
+       pin to its foot, so it stretches to meet it. */
+    align-items: stretch;
   }
+}
+.setup-copy {
+  display: flex;
+  flex-direction: column;
+}
+/* Pushed to the bottom of the copy column, filling the ~230px of empty cream
+   the lede used to end above, and putting the trust claim where it reads as a
+   standing guarantee rather than the tail of a paragraph. */
+.setup-privacy {
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+@media (min-width: 1000px) {
+  .setup-privacy {
+    margin-top: auto;
+  }
+}
+
+/* The collapsed create affordance: the list's own heading, with the way to add
+   to it on the right. The full panel is ~530px tall and rendering it on every
+   visit put the first study card near y=940 — a scroll on every visit, past a
+   form most visits do not want. */
+.list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.list-head-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
 }
 /* In its own column the copy is already at its measure; the ch caps that used
    to hold it back from a 1140px panel would now clamp it twice. */
@@ -865,9 +920,7 @@ p {
    scans a list of studies for. */
 .study-count {
   color: var(--strong);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-weight: 600;
 }
 .study-count.is-empty {
   color: var(--muted);
@@ -981,10 +1034,9 @@ p {
 }
 .camera-guide-hint {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
   color: color-mix(in srgb, #fdf4e7 78%, transparent);
   text-shadow: 0 1px 3px rgba(0, 30, 35, 0.6);
   transition: opacity 0.3s ease;
@@ -1215,9 +1267,8 @@ p {
   transform: translateX(-50%);
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 13px;
+  letter-spacing: 0.005em;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -1305,9 +1356,18 @@ p {
   }
 }
 
+/* Letterboxed above the control band rather than filling the stage.
+   The moderator's controls used to be absolutely positioned over the stimulus
+   footer, and gaze is normalised against the stimulus rect — so a participant
+   looking at Finish, at Discard, or at the "recording…" hint produced samples
+   recorded as attention to the region the chrome was covering. The band below
+   is reserved, its depth is computed in ui/record.ts (controlBandHeight) from
+   the same edge tolerance the sample filter uses, and --record-band is set on
+   the stage at mount and on every resize. Nothing interactive is inside the
+   measured rect. */
 .record-stimulus {
   position: absolute;
-  inset: 0;
+  inset: 0 0 var(--record-band, 96px) 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1326,9 +1386,14 @@ p {
 }
 /* The peach fill needs a guaranteed ground: on its own it is ~1.6:1 over the
    light page most stimuli are, which loses the one time-remaining signal. */
+/* The first 6px of the reserved band, so it underlines the stimulus rather
+   than lying across its top edge. It is not a control, but it is the one
+   animating thing on the screen, and anything that pulls a participant's eye
+   inside the measured rect turns their glance at the clock into a fixation on
+   whatever it covers. */
 .record-progress-track {
   position: absolute;
-  top: 0;
+  top: calc(100% - var(--record-band, 96px));
   left: 0;
   right: 0;
   height: 6px;
@@ -1347,6 +1412,9 @@ p {
 .record-chrome > * {
   pointer-events: auto;
 }
+/* In the reserved teal band, never over the stimulus. The 14px inset and the
+   40px min-height together are CONTROL_STRIP_PX in ui/record.ts; the band is
+   solved against that number, so the two have to be changed together. */
 .record-controls {
   position: absolute;
   bottom: 14px;
@@ -1354,12 +1422,27 @@ p {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
+  min-height: 40px;
   gap: 8px;
 }
-/* The buttons sit over the stimulus, which is usually a light page, so they
-   carry the same dark backing as the hint pill to stay legible on it. */
+/* The band is teal and the pills sit on it, but a stimulus that does not fill
+   the width leaves teal beside it too — the backing keeps one recipe for both. */
 .record-controls .btn {
   background: color-mix(in srgb, #003f48 82%, transparent);
+}
+/* The armed half of the discard.
+   Every control in this strip carries the same teal backing, so "Really
+   discard?" rendered as a pill essentially identical to Finish beside it: the
+   one click in the app that destroys a participant's only pass over the screen
+   was the least distinct confirm in the product. Filled, not outlined — it has
+   to be unmistakable from across a desk, in a dark room, in peripheral vision. */
+.record-controls .btn.is-armed,
+.record-controls .btn.is-armed:hover,
+.calib-cancel.is-armed,
+.calib-cancel.is-armed:hover {
+  background: var(--signal-bad);
+  border-color: var(--signal-bad);
+  color: #40140c;
 }
 /* Who is being recorded, and how long is left. The 6px progress sliver at the
    top edge of the screen is a peripheral cue, not a readout: a moderator
@@ -1374,12 +1457,14 @@ p {
   padding: 6px 14px;
   white-space: nowrap;
 }
+/* Read from across a desk mid-session, which is the worst possible place for
+   tracked 11px uppercase. It is also a participant label someone typed — "p04"
+   is not "P04" — so it is shown as written. */
 .record-participant {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.005em;
   color: var(--strong);
 }
 .record-clock {
@@ -1394,9 +1479,8 @@ p {
 }
 .record-hint {
   font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 13px;
+  letter-spacing: 0.005em;
   color: var(--body-2);
   background: color-mix(in srgb, #003f48 82%, transparent);
   padding: 6px 14px;
@@ -1533,14 +1617,31 @@ p {
 }
 .results-layout {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 24px;
   align-items: start;
+  /* The layout stretches to fill the screen (see .screen-fill), and grid's
+     default would share that spare height out between the stage row and the
+     data row — opening a gap in the middle of the page on a study with one
+     recording. Rows keep their own heights; the slack collects at the foot. */
+  align-content: start;
 }
 .results-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+/* The rail tracks the scroll instead of stranding at the top of a long page.
+   Only where it certainly fits: a sticky block taller than the viewport pins
+   its own bottom out of reach, and this one has no inner scroller by design
+   (see .results-sidebar below). Two columns and 760px of viewport is the point
+   at which the rail's tallest state — five view chips, the participant select,
+   the low-signal toggle, its note and five summary rows — has room to spare. */
+@media (min-width: 1181px) and (min-height: 760px) {
+  .results-sidebar {
+    position: sticky;
+    top: 24px;
+  }
 }
 /* Regions and recordings, under the stage at the stage's width.
  *
@@ -1552,6 +1653,12 @@ p {
  * the stage — the view, who is in it, and the headline numbers for that
  * selection — and the data goes where the space is. */
 .results-data {
+  /* Both tracks. The tables are the study's findings and they were being
+     rendered in the narrower of the screen's two columns while a rail of empty
+     cream ran down the side of them — a measured 437px of it at 1440×900 with
+     four recordings, growing with every recording added. Under the whole
+     layout they get the full measure and the rail has nothing left to strand. */
+  grid-column: 1 / -1;
   display: grid;
   gap: 20px;
   margin-top: 20px;
@@ -1621,31 +1728,34 @@ p {
   border-radius: var(--r-card);
   padding: 20px;
 }
-/* A card at the foot of the stage, opaque and carrying the action.
-   It was a full-bleed opaque sheet, which hid the very stimulus the regions are
-   meant to be drawn over — and it said nothing but "run a session" in prose,
-   while the screen's only other content was the same sentence again in the
-   sidebar. (Opaque rather than a wash: at 55% it blended into a URL study's
-   placeholder and the two texts printed character-for-character on top of each
-   other.) */
+/* A footer bar under the stage, not a card on it.
+   It has been a full-bleed opaque sheet (which hid the very stimulus the
+   regions are meant to be drawn over) and then a floating card pinned 24px off
+   the stage's bottom edge — which, on a short stimulus, still landed over the
+   middle of the wireframe with a flat border and no shadow, reading as a modal
+   that had lost its backdrop. Out of the stage entirely: a full-width strip
+   joined to the stage's bottom edge, which is what it always was. */
 .stage-empty {
-  position: absolute;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  display: grid;
-  justify-items: center;
-  gap: 14px;
-  max-width: min(40ch, calc(100% - 48px));
-  text-align: center;
-  padding: 20px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 16px 20px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--r-card);
+  /* Joined to the stage above rather than floating clear of it. */
+  border-top: 0;
+  border-radius: 0 0 var(--r-card) var(--r-card);
+  margin-top: -1px;
 }
 .stage-empty p {
   margin: 0;
   color: var(--body-2);
+}
+/* The stage gives up its bottom corners to the strip it is joined to. */
+.results-main:has(.stage-empty) .results-stage {
+  border-radius: var(--r-card) var(--r-card) 0 0;
 }
 .placeholder-actions {
   margin-top: 16px;
@@ -1685,10 +1795,8 @@ p {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--font-body);
+  font-size: 12.5px;
   color: var(--muted);
 }
 .legend-swatches {
@@ -1733,10 +1841,9 @@ p {
 }
 .seg {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.005em;
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--strong) 25%, var(--line));
   border-radius: var(--r-chip);
@@ -1769,11 +1876,11 @@ p {
   color: var(--strong);
   font-variant-numeric: tabular-nums;
 }
+/* The names of the numbers, read as words rather than shouted as labels. */
 .stat-row span {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  letter-spacing: 0;
   color: var(--muted);
 }
 .row-between {
@@ -1795,12 +1902,11 @@ p {
 }
 .data-table th {
   text-align: left;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 0;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
   padding: 6px 4px;
   border-bottom: 1px solid var(--line);
 }
@@ -1934,6 +2040,13 @@ abbr[title] {
   position: absolute;
   pointer-events: none;
 }
+/* Regions are annotation, not measurement, and the overlay that ends up in a
+   deck is usually the clean one. The sidebar's "Show regions" switch takes the
+   whole layer off the stage — including the drawing surface, since a crosshair
+   over an invisible layer is a control that lies. */
+.aoi-layer.is-hidden {
+  display: none;
+}
 .aoi-layer.is-drawing {
   pointer-events: auto;
   cursor: crosshair;
@@ -1968,6 +2081,14 @@ abbr[title] {
     0 0 0 1px rgba(255, 255, 255, 0.8),
     0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+/* On demand, not burned on.
+   Every box carried a solid dark chip permanently: the one over the payment CTA
+   sat directly on the heat blob it was naming, and the rest occluded the
+   wireframe content underneath. The default state of a region is now its
+   outline; the name appears when the box is hovered or focused, or when its row
+   in the AOI table is — which is the moment anyone actually needs to know which
+   box is which. The region name is also user-typed data, so it is set in the
+   case it was written in rather than shouted. */
 .aoi-label {
   position: absolute;
   top: -21px;
@@ -1975,13 +2096,21 @@ abbr[title] {
   background: var(--accent);
   color: var(--accent-contrast);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   padding: 2px 7px;
   border-radius: 3px;
   white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.aoi-box:hover .aoi-label,
+.aoi-box:focus-within .aoi-label,
+.aoi-box.is-linked .aoi-label,
+.aoi-layer.is-drawing .aoi-label {
+  opacity: 1;
 }
 .aoi-remove {
   position: absolute;
@@ -2060,15 +2189,23 @@ abbr[title] {
   color: var(--accent-contrast);
 }
 
-@media (max-width: 900px) {
+/* The stack point is set by the stage, not by the breakpoint chart. Holding
+   1fr/320px down to 900px meant a 1024px laptop squeezed the stimulus — the
+   thing the whole screen exists to show — into ~600px so that a 320px rail
+   could keep its place beside it. Below this width the stage gets the full
+   measure and the rail goes under it. */
+@media (max-width: 1180px) {
   .results-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   /* The screen no longer needs to reach the viewport floor once the stage and
      the sidebar are stacked. */
   .screen-fill {
     min-height: 0;
   }
+}
+
+@media (max-width: 900px) {
   .study-card {
     grid-template-columns: 1fr;
   }

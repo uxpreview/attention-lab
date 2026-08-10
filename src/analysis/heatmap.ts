@@ -40,18 +40,37 @@ export interface HeatmapOptions {
   percentile?: number;
 }
 
-/** Blue → cyan → green → yellow → red, the convention for attention maps. */
-const RAMP: Array<[number, number, number, number]> = [
-  [0.0, 0, 0, 255],
-  [0.25, 0, 200, 255],
-  [0.45, 0, 220, 120],
-  [0.65, 240, 240, 0],
-  [0.85, 255, 130, 0],
-  [1.0, 255, 0, 0],
+/**
+ * The attention ramp: [position, r, g, b, alpha].
+ *
+ * This used to run blue → cyan → green → yellow → red and call itself "the
+ * convention for attention maps". It is not; it is jet, the GIS/matplotlib
+ * default, and on an attention map it does two harmful things. Visually it
+ * fights a warm cream page — the contour view rendered as a blue-green weather
+ * map. More seriously it is dishonest: jet's floor is a *saturated* colour, so
+ * a region that got the faintest brush of gaze is painted a solid blue that
+ * carries as much visual weight as the red core, and a reader's eye reports
+ * attention where there was effectively none.
+ *
+ * So the ramp carries its own alpha and starts at zero. Nothing looked at is
+ * nothing drawn — the transition from "no data" to "a little data" is a fade
+ * rather than a step onto a coloured plateau — and the hues stay inside the
+ * product's palette: pale amber through --accent-warm vermillion (#e73d00)
+ * into a deep oxblood at the ceiling. Intensity therefore reads three ways at
+ * once (more opaque, more saturated, darker), which also survives greyscale
+ * printing and the common colour vision deficiencies, none of which jet does.
+ */
+const RAMP: Array<[number, number, number, number, number]> = [
+  [0.0, 250, 214, 137, 0.0],
+  [0.2, 247, 190, 88, 0.34],
+  [0.45, 240, 139, 30, 0.62],
+  [0.72, 231, 61, 0, 0.85],
+  [1.0, 125, 20, 8, 1.0],
 ];
 
+/** RGBA, 256 entries. Alpha is stored 0-255 like the rest. */
 function buildRamp(): Uint8ClampedArray {
-  const lut = new Uint8ClampedArray(256 * 3);
+  const lut = new Uint8ClampedArray(256 * 4);
   for (let i = 0; i < 256; i++) {
     const t = i / 255;
     let lo = RAMP[0];
@@ -65,9 +84,10 @@ function buildRamp(): Uint8ClampedArray {
     }
     const span = hi[0] - lo[0];
     const f = span > 0 ? (t - lo[0]) / span : 0;
-    lut[i * 3] = lo[1] + (hi[1] - lo[1]) * f;
-    lut[i * 3 + 1] = lo[2] + (hi[2] - lo[2]) * f;
-    lut[i * 3 + 2] = lo[3] + (hi[3] - lo[3]) * f;
+    lut[i * 4] = lo[1] + (hi[1] - lo[1]) * f;
+    lut[i * 4 + 1] = lo[2] + (hi[2] - lo[2]) * f;
+    lut[i * 4 + 2] = lo[3] + (hi[3] - lo[3]) * f;
+    lut[i * 4 + 3] = (lo[4] + (hi[4] - lo[4]) * f) * 255;
   }
   return lut;
 }
@@ -79,23 +99,50 @@ const BAND_STEP = 32;
 export const CONTOUR_BANDS = 256 / BAND_STEP;
 
 /**
+ * Floor on a contour band's opacity, as a fraction of the overlay's.
+ *
+ * The heat view wants the ramp's own alpha curve unmodified. The contour view
+ * cannot: its payload is the *band edges*, and the outermost drawn band sits at
+ * around 0.2 of the ramp's alpha, which is a band you cannot see and therefore
+ * cannot cite. Band 0 — the genuinely cold floor — is still drawn at zero, so
+ * the honesty property survives; this only lifts bands that are already above
+ * the noise line into being visible as bands.
+ */
+const CONTOUR_MIN_ALPHA = 0.55;
+
+function contourAlpha(alpha: number): number {
+  return Math.max(CONTOUR_MIN_ALPHA * 255, alpha);
+}
+
+/**
  * The ramp as a CSS colour, for legends.
  *
  * A legend that hard-codes its own gradient is a legend that drifts: change
  * RAMP above and the strip under the stage keeps promising the old colours. So
  * the only way to get a swatch is to ask the same lookup table the pixels came
  * from. `t` is 0 (coldest) to 1 (the display ceiling).
+ *
+ * Alpha comes along, because with this ramp the transparency *is* half the
+ * message — a legend drawn as opaque swatches would promise a solid amber floor
+ * the renderer never paints. The overlay's own `opacity` is not folded in: the
+ * legend shows the shape of the scale, not the strength of one overlay, and the
+ * strip is given a ground to sit on in CSS so the fade reads correctly.
  */
 export function rampColour(t: number): string {
   const i = Math.max(0, Math.min(255, Math.round(t * 255)));
-  return `rgb(${COLOUR_LUT[i * 3]}, ${COLOUR_LUT[i * 3 + 1]}, ${COLOUR_LUT[i * 3 + 2]})`;
+  return rgba(i * 4, COLOUR_LUT[i * 4 + 3]);
+}
+
+function rgba(offset: number, alpha: number): string {
+  return `rgba(${COLOUR_LUT[offset]}, ${COLOUR_LUT[offset + 1]}, ${COLOUR_LUT[offset + 2]}, ${(alpha / 255).toFixed(3)})`;
 }
 
 /** The visible contour bands, coldest first. Band 0 is drawn transparent. */
 export function contourBandColours(): string[] {
   const out: string[] = [];
   for (let band = 1; band < CONTOUR_BANDS; band++) {
-    out.push(rampColour((band * BAND_STEP) / 255));
+    const i = band * BAND_STEP;
+    out.push(rgba(i * 4, contourAlpha(COLOUR_LUT[i * 4 + 3])));
   }
   return out;
 }
@@ -220,17 +267,22 @@ export function paintField(
     if (style === "contour") {
       // Banded ramp: reads as an isoline map, easier to cite exact regions from.
       const band = Math.floor(intensity / BAND_STEP) * BAND_STEP;
-      dst[i] = COLOUR_LUT[band * 3];
-      dst[i + 1] = COLOUR_LUT[band * 3 + 1];
-      dst[i + 2] = COLOUR_LUT[band * 3 + 2];
-      dst[i + 3] = band === 0 ? 0 : Math.round(opacity * 255);
+      const lut = band * 4;
+      dst[i] = COLOUR_LUT[lut];
+      dst[i + 1] = COLOUR_LUT[lut + 1];
+      dst[i + 2] = COLOUR_LUT[lut + 2];
+      dst[i + 3] = band === 0 ? 0 : Math.round(opacity * contourAlpha(COLOUR_LUT[lut + 3]));
     } else {
-      dst[i] = COLOUR_LUT[intensity * 3];
-      dst[i + 1] = COLOUR_LUT[intensity * 3 + 1];
-      dst[i + 2] = COLOUR_LUT[intensity * 3 + 2];
-      // Fade the cold tail out so the stimulus stays readable underneath.
-      const fade = Math.min(1, intensity / 60);
-      dst[i + 3] = Math.round(opacity * 255 * fade);
+      const lut = intensity * 4;
+      dst[i] = COLOUR_LUT[lut];
+      dst[i + 1] = COLOUR_LUT[lut + 1];
+      dst[i + 2] = COLOUR_LUT[lut + 2];
+      // The cold tail fades out because the ramp itself does — see RAMP. This
+      // used to be a separate `min(1, intensity / 60)` fudge layered over an
+      // opaque ramp, which is the same idea done in a place the legend could
+      // not see, so the legend promised a solid blue floor the pixels did not
+      // have.
+      dst[i + 3] = Math.round(opacity * COLOUR_LUT[lut + 3]);
     }
   }
 }

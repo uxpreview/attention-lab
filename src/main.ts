@@ -8,7 +8,7 @@ import { GazeEngine, type TrackerStatus } from "./tracker/gaze";
 import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/regression";
 import { describeAccuracy, runCalibration } from "./ui/calibration";
 import { appBar, LAB_URL } from "./ui/chrome";
-import { clear, confirmButton, el } from "./ui/dom";
+import { clear, confirmButton, el, relativeDay } from "./ui/dom";
 import { runRecording } from "./ui/record";
 import { renderResults } from "./ui/results";
 
@@ -136,6 +136,34 @@ function sessionBlockReason(): string | null {
   return null;
 }
 
+/**
+ * Everything on the study list whose state depends on whether a session can
+ * run: the notice at the top and every Run session button.
+ *
+ * They are updated in place rather than by re-rendering, because the block
+ * depends on the *window size* — the one screen state a user changes by hand,
+ * often while the create form has half a study typed into it. Cleared at the
+ * start of each render, so detached nodes are not kept alive by the listener.
+ */
+let blockWatchers: Array<(reason: string | null) => void> = [];
+
+function watchSessionBlock(paint: (reason: string | null) => void): void {
+  blockWatchers.push(paint);
+  paint(sessionBlockReason());
+}
+
+let lastBlockReason = sessionBlockReason();
+let blockResizeTimer = 0;
+window.addEventListener("resize", () => {
+  window.clearTimeout(blockResizeTimer);
+  blockResizeTimer = window.setTimeout(() => {
+    const reason = sessionBlockReason();
+    if (reason === lastBlockReason) return;
+    lastBlockReason = reason;
+    for (const paint of blockWatchers) paint(reason);
+  }, 200);
+});
+
 function experimentHead(): HTMLElement {
   // The bar is shared with the session and results screens, which used to drop
   // the chrome entirely — see ui/chrome.ts.
@@ -195,6 +223,7 @@ async function showStudyList(): Promise<void> {
   releaseStatusListener = null;
 
   clear(app);
+  blockWatchers = [];
   const studies = await listStudies();
   const editing = editingStudy;
   editingStudy = null;
@@ -253,8 +282,8 @@ async function showStudyList(): Promise<void> {
     el(
       "div",
       { class: "container" },
-      handheldNotice(),
-      isHandheld() ? null : newStudyForm(editing),
+      blockNoticeSlot(),
+      isHandheld() ? null : setupSection(editing, studies.length),
       list
     )
   );
@@ -262,10 +291,92 @@ async function showStudyList(): Promise<void> {
   app.append(header, body, footer());
 }
 
-/** Said once, at the top, before anyone builds a study they cannot run. */
-function handheldNotice(): HTMLElement | null {
-  if (!isHandheld()) return null;
+/**
+ * The create form, or the button that opens it.
+ *
+ * The panel is ~530px tall and used to render on every visit to the list, which
+ * put the first study card at roughly y=940 on a 1440×900 screen: you scrolled
+ * every single time to reach the work you came for, past a form you mostly did
+ * not want. It earns that space in exactly two situations — the zero state,
+ * where the display heading and lede are the only thing on the screen worth
+ * reading, and an edit, which is a form by definition. Otherwise it collapses
+ * to one button that expands it in place.
+ */
+function setupSection(editing: Study | null, studyCount: number): HTMLElement {
+  const slot = el("div", { class: "setup-slot" });
 
+  const showForm = (existing: Study | null, collapsible: boolean): void => {
+    clear(slot);
+    slot.append(newStudyForm(existing, collapsible ? showBar : null));
+  };
+
+  function showBar(): void {
+    clear(slot);
+    slot.append(
+      el(
+        "div",
+        { class: "list-head" },
+        el(
+          "h2",
+          { class: "list-head-title" },
+          "Studies",
+          el("span", { class: "pill pill-count" }, String(studyCount))
+        ),
+        el(
+          "button",
+          { class: "btn btn-primary", type: "button", onclick: () => showForm(null, true) },
+          "New study"
+        )
+      )
+    );
+  }
+
+  if (editing || studyCount === 0) showForm(editing, false);
+  else showBar();
+
+  return slot;
+}
+
+/**
+ * Why a session cannot be run here, said on the screen rather than in a
+ * tooltip.
+ *
+ * This used to be handheld-only, while the block itself is not: a 660×820
+ * desktop window with a mouse rendered three prominent teal "Run session" pills
+ * that did nothing, with the explanation living entirely in a `title` — which
+ * is to say, nowhere. Anything that blocks a session now says so out loud, and
+ * updates itself when the window it is complaining about is resized.
+ */
+function blockNoticeSlot(): HTMLElement {
+  const slot = el("div", { class: "notice-slot" });
+  watchSessionBlock((reason) => {
+    clear(slot);
+    if (!reason) return;
+    slot.append(isHandheld() ? handheldNotice() : windowTooSmallNotice(reason));
+  });
+  return slot;
+}
+
+function windowTooSmallNotice(reason: string): HTMLElement {
+  return el(
+    "aside",
+    { class: "panel handheld" },
+    el("p", { class: "label eyebrow" }, "Sessions are paused in this window"),
+    el(
+      "p",
+      { class: "handheld-body" },
+      `${reason}. Calibration puts its targets at 6% and 94% of each axis, and in a window this size those land close enough to the edge that a participant's gaze leaves the screen rather than reaching the dot — the model would fit to points nobody actually looked at.`
+    ),
+    el(
+      "p",
+      { class: "handheld-body" },
+      "Everything else works. Studies can be created and edited, regions drawn, and existing results read; Run session comes back as soon as the window is big enough."
+    )
+  );
+}
+
+/** Said once, at the top, before anyone builds a study they cannot run. */
+function handheldNotice(): HTMLElement {
   const copy = el(
     "button",
     { class: "btn btn-small", type: "button" },
@@ -311,19 +422,6 @@ interface StudyStats {
   count: number;
   /** Timestamp of the most recent recording, or null if there are none. */
   lastRun: number | null;
-}
-
-/** Coarse on purpose: "3 days ago" is what a researcher scans for, and a
- * to-the-minute stamp on a list of ten studies is noise. */
-function relativeDay(timestamp: number, now = Date.now()): string {
-  const days = Math.floor((now - timestamp) / 86_400_000);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days} days ago`;
-  const months = Math.round(days / 30);
-  if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
-  const years = Math.round(days / 365);
-  return `${years} year${years === 1 ? "" : "s"} ago`;
 }
 
 function studyCard(study: Study, stats: StudyStats): HTMLElement {
@@ -422,24 +520,37 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
 }
 
 function runSessionButton(study: Study): HTMLButtonElement {
-  const blocked = sessionBlockReason();
-  if (blocked) {
-    return el(
-      "button",
-      { class: "btn btn-primary", type: "button", disabled: true, title: blocked },
-      "Run session"
-    );
-  }
-  return el(
+  const btn = el(
     "button",
-    { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
+    {
+      class: "btn btn-primary",
+      type: "button",
+      // Re-checked at click time rather than trusted from render time: the
+      // window can be resized between the two.
+      onclick: () => {
+        if (sessionBlockReason()) return;
+        void runSession(study);
+      },
+    },
     "Run session"
   );
+  // Disabled rather than hidden — a control that vanishes leaves you wondering
+  // whether the tool is broken — and the reason is now also stated on the
+  // screen, in the notice at the top, rather than only in this title.
+  watchSessionBlock((reason) => {
+    btn.disabled = reason !== null;
+    if (reason) btn.setAttribute("title", reason);
+    else btn.removeAttribute("title");
+  });
+  return btn;
 }
 
 /** Results, with the route back and — when this machine can run one — the way
  * on to a session, so a study with no data yet is not a dead end. */
 function openResults(study: Study): Promise<void> {
+  // The study list's nodes are about to be replaced; nothing should keep its
+  // buttons alive on the resize listener.
+  blockWatchers = [];
   return renderResults(app, study, () => void showStudyList(), {
     onRunSession: sessionBlockReason() ? null : () => void runSession(study),
     runBlockedReason: sessionBlockReason(),
@@ -457,8 +568,14 @@ function studyDeleteButton(study: Study): HTMLButtonElement {
 
 /** The study form: creates when `existing` is null, edits it otherwise.
  * Editing keeps the study's id, recordings and regions; an image stimulus
- * stays locked because every recording is normalised against it. */
-function newStudyForm(existing: Study | null = null): HTMLElement {
+ * stays locked because every recording is normalised against it.
+ *
+ * `onCollapse`, when given, is what Cancel does — used by the collapsed create
+ * affordance to fold the panel back into its button without a re-render. */
+function newStudyForm(
+  existing: Study | null = null,
+  onCollapse: (() => void) | null = null
+): HTMLElement {
   const lockedImage = existing !== null && existing.stimulus.kind === "image";
 
   const nameInput = el("input", {
@@ -645,7 +762,19 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
         ? lockedImage
           ? "Name, task and duration are safe to change mid-study. The stimulus image stays locked: every existing recording is aligned to it."
           : "Name, task, duration and the page URL can all change. Recordings already made keep the gaze they captured."
-        : "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser. Nothing you upload and no frame of video ever leaves this machine."
+        : "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser."
+    ),
+    // Pinned to the foot of the copy column, which is where the imbalance was:
+    // the copy ran out at the end of the lede while the controls column carried
+    // on through the drop zone, four fields and a submit, leaving ~230px of
+    // empty cream. The guarantee also reads better here than as the tail of a
+    // paragraph — a standing claim with a lock beside it, on the screen where
+    // someone decides whether to upload their client's unreleased wireframe.
+    el(
+      "p",
+      { class: "privacy-note setup-privacy" },
+      el("span", { class: "lock-glyph", "aria-hidden": "true" }),
+      "Nothing you upload and no frame of video leaves this machine. There is no server: studies, recordings and the image itself live in this browser's own storage."
     )
   );
 
@@ -673,8 +802,16 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
       "div",
       { class: "form-actions" },
       el("button", { class: "btn btn-primary", type: "submit" }, existing ? "Save changes" : "Create study"),
-      existing
-        ? el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "Cancel")
+      existing || onCollapse
+        ? el(
+            "button",
+            {
+              class: "btn btn-ghost",
+              type: "button",
+              onclick: onCollapse ?? (() => void showStudyList()),
+            },
+            "Cancel"
+          )
         : null
     )
   );
@@ -694,9 +831,11 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     controls
   );
 
-  // Editing arrives from a button further down the page; bring the form and
-  // its first field to the operator rather than making them scroll to it.
-  if (existing) queueMicrotask(() => nameInput.focus());
+  // Editing arrives from a button further down the page, and the create form
+  // now arrives from a button too; either way the operator asked for this form,
+  // so put the cursor in its first field rather than making them reach for it.
+  // Not in the zero state, where the form is simply what the page is.
+  if (existing || onCollapse) queueMicrotask(() => nameInput.focus());
 
   return form;
 }
@@ -813,6 +952,7 @@ function stimulusCheck(study: Study): HTMLElement | null {
 
 async function runSession(study: Study): Promise<void> {
   clear(app);
+  blockWatchers = [];
 
   // role="status" makes this a polite live region: the camera states below are
   // exactly what a non-sighted operator needs to hear to know it is working.
@@ -894,6 +1034,32 @@ async function runSession(study: Study): Promise<void> {
   const gazeDotToggle = el("input", { type: "checkbox" });
   const actions = el("div", { class: "session-actions" });
 
+  /**
+   * The controls that only mean anything once a camera is running.
+   *
+   * Both dead ends on this screen used to leave these live and pointless. The
+   * unloadable-URL branch removed them; the camera-failure branch did not, so a
+   * red "Could not start the camera" sat sandwiched between a working
+   * participant-label field and a working "show live gaze dot" checkbox, neither
+   * of which could lead anywhere. One helper, called by both — hiding rather
+   * than removing, because a retry that succeeds has to be able to put them back
+   * with whatever was already typed into them.
+   */
+  const sessionControls = el(
+    "div",
+    { class: "session-controls" },
+    field("Participant label", participantInput),
+    el(
+      "label",
+      { class: "checkbox" },
+      gazeDotToggle,
+      el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
+    )
+  );
+  const showSessionControls = (visible: boolean): void => {
+    sessionControls.hidden = !visible;
+  };
+
   const panel = el(
     "section",
     { class: "panel session-panel" },
@@ -903,13 +1069,7 @@ async function runSession(study: Study): Promise<void> {
     preview,
     privacyNote,
     status,
-    field("Participant label", participantInput),
-    el(
-      "label",
-      { class: "checkbox" },
-      gazeDotToggle,
-      el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
-    ),
+    sessionControls,
     outcomeLine,
     actions
   );
@@ -938,10 +1098,12 @@ async function runSession(study: Study): Promise<void> {
   // participant and then show them a 404, so the camera never starts.
   if (study.stimulus.kind === "url" && "problem" in normaliseStimulusUrl(study.stimulus.url)) {
     setStatus("This study's address cannot be loaded, so a session cannot run against it.", "bad");
-    // The rest of the session apparatus would only dress up a dead end.
+    // The rest of the session apparatus would only dress up a dead end. This
+    // one is permanent — no retry can fix a stored address — so the camera
+    // frame goes with it.
     preview.remove();
     privacyNote.remove();
-    panel.querySelectorAll(".field, .checkbox").forEach((node) => node.remove());
+    showSessionControls(false);
     return;
   }
 
@@ -955,6 +1117,7 @@ async function runSession(study: Study): Promise<void> {
     clearOutcome();
     setStatus("Starting camera…");
     preview.classList.remove("is-dead");
+    showSessionControls(true);
 
     try {
       await engine.start((message) => setStatus(message));
@@ -962,19 +1125,18 @@ async function runSession(study: Study): Promise<void> {
       setStatus(describeCameraFailure(err), "bad");
       // A camera that never started has no picture to show. Hiding the frame
       // beats leaving a dead solid-teal rectangle on the screen; it comes back
-      // if a retry succeeds.
+      // if a retry succeeds, and so do the controls.
       preview.classList.add("is-dead");
+      showSessionControls(false);
       clear(actions);
       actions.append(
+        // One way forward, not two that read as the same thing twice. "Reload
+        // the page" was a second equal-weight button for an action "Try again"
+        // already covers in every case where it would have helped.
         el(
           "button",
           { class: "btn btn-primary", type: "button", onclick: () => void startCamera() },
           "Try again"
-        ),
-        el(
-          "button",
-          { class: "btn", type: "button", onclick: () => window.location.reload() },
-          "Reload the page"
         ),
         el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "Back to studies")
       );

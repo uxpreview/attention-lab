@@ -1,7 +1,7 @@
 import { newId, saveRecording } from "../data/store";
 import type { Recording, Study } from "../data/types";
 import type { GazeEngine } from "../tracker/gaze";
-import { el, inertSiblings, nextFrame } from "./dom";
+import { confirmButton, el, inertSiblings, nextFrame } from "./dom";
 
 /**
  * The recording screen: shows the stimulus full-bleed and captures gaze.
@@ -31,6 +31,68 @@ export type RecordOutcome =
   | { status: "cancelled" }
   | { status: "empty" };
 
+/**
+ * How far outside the stimulus a gaze sample is still kept and clamped in.
+ *
+ * Gaze estimates near an edge routinely land just past it, and throwing those
+ * away would bias edge content downward in every heatmap — so a sample within
+ * this fraction of the stimulus is pulled back onto the nearest edge instead.
+ * It is exported because it is not only a filter constant: it sets how far the
+ * moderator's own chrome has to stay clear of the stimulus (see
+ * {@link controlBandHeight}).
+ */
+export const EDGE_TOLERANCE = 0.05;
+
+/**
+ * Height of the control strip at the bottom of the reserved band, including
+ * its inset from the screen edge. Mirrored by `min-height` and `bottom` on
+ * `.record-controls`, which is the pair that has to stay true.
+ */
+export const CONTROL_STRIP_PX = 54;
+
+/**
+ * Height of the band reserved at the foot of the stage for the moderator's
+ * controls, for a stage this tall.
+ *
+ * This is a data-integrity calculation, not a layout preference. The controls
+ * used to be absolutely positioned over the stimulus, and every gaze sample is
+ * normalised against the stimulus rect: a participant glancing at the Finish
+ * button, the discard button or the "RECORDING…" hint produced samples that
+ * were recorded as attention to whatever the chrome was sitting on, which on a
+ * full-bleed stimulus is the footer. The moderator's own furniture was
+ * manufacturing attention data in the exact region it covered.
+ *
+ * Letterboxing the stimulus above the strip is necessary but not sufficient,
+ * because of {@link EDGE_TOLERANCE}: 5% of an 800px stimulus is 40px of chrome
+ * that would still be clamped back onto the footer. So the band is solved for
+ * instead — it is exactly deep enough that the top of the control strip sits
+ * below the tolerance line:
+ *
+ *     stageHeight - CONTROL_STRIP_PX >= (1 + EDGE_TOLERANCE) * (stageHeight - band)
+ *
+ * Rearranged and rounded up, which is what this returns.
+ */
+export function controlBandHeight(stageHeight: number): number {
+  const height = Math.max(0, stageHeight);
+  // The plus one is not slop: the tolerance test keeps a sample at *exactly*
+  // 1.05, so solving the inequality as an equality leaves the top row of the
+  // strip on the wrong side of it.
+  return Math.ceil((EDGE_TOLERANCE * height + CONTROL_STRIP_PX) / (1 + EDGE_TOLERANCE)) + 1;
+}
+
+/**
+ * True when a control strip in the reserved band could still be normalised
+ * into the stimulus rect — the property the band exists to make impossible.
+ * Exported for the test suite, which asserts it is false at every plausible
+ * stage size.
+ */
+export function chromeCanContaminate(stageHeight: number): boolean {
+  const stimulusHeight = stageHeight - controlBandHeight(stageHeight);
+  if (stimulusHeight <= 0) return true;
+  const topOfControls = stageHeight - CONTROL_STRIP_PX;
+  return topOfControls / stimulusHeight <= 1 + EDGE_TOLERANCE;
+}
+
 export async function runRecording(
   host: HTMLElement,
   options: RecordOptions
@@ -47,6 +109,15 @@ export async function runRecording(
   const stimulusLayer = el("div", { class: "record-stimulus" });
   const chrome = el("div", { class: "record-chrome" });
   const progressBar = el("div", { class: "record-progress" });
+
+  // The band the stimulus is letterboxed above, published to CSS so the one
+  // number is derived in one place. See controlBandHeight: this is what keeps
+  // the moderator's controls out of the measured rect.
+  const applyControlBand = (): void => {
+    stage.style.setProperty("--record-band", `${controlBandHeight(window.innerHeight)}px`);
+  };
+  applyControlBand();
+
   stage.append(stimulusLayer);
   if (study.duration > 0) {
     // The fill sits in a dark track: peach alone is ~1.6:1 over a typical
@@ -98,6 +169,10 @@ export async function runRecording(
   // after it, so those events re-measure: one layout read per event.
   let rect = stimulusEl.getBoundingClientRect();
   const remeasure = () => {
+    // The band is a function of the stage height, so a resize has to move it
+    // before the rect is read back — otherwise a window made taller mid-session
+    // leaves the strip inside the tolerance zone of the new, taller stimulus.
+    applyControlBand();
     rect = stimulusEl.getBoundingClientRect();
   };
   window.addEventListener("resize", remeasure);
@@ -124,8 +199,12 @@ export async function runRecording(
     const ny = (sample.y - rect.top) / rect.height;
     // A small margin outside the stimulus is kept and clamped: gaze estimates
     // near an edge routinely land just past it, and discarding those would bias
-    // edge content downward in every heatmap.
-    if (nx < -0.05 || nx > 1.05 || ny < -0.05 || ny > 1.05) return;
+    // edge content downward in every heatmap. Nothing interactive is allowed
+    // inside that margin — controlBandHeight is solved against this constant so
+    // that a look at the moderator's controls falls outside it and is dropped
+    // rather than being recorded as a look at the stimulus footer.
+    const limit = 1 + EDGE_TOLERANCE;
+    if (nx < -EDGE_TOLERANCE || nx > limit || ny < -EDGE_TOLERANCE || ny > limit) return;
 
     insideCount++;
     points.push({
@@ -233,9 +312,7 @@ function waitForStop(
   return new Promise((resolve) => {
     const start = performance.now();
     let rafId = 0;
-    let disarmTimer = 0;
     let clockTimer = 0;
-    let armed = false;
 
     const baseHint =
       durationMs > 0 ? "Recording… space or Finish ends early" : "Recording… space or Finish when done";
@@ -252,7 +329,18 @@ function waitForStop(
       clock
     );
     const finishBtn = el("button", { class: "btn btn-small", type: "button" }, "Finish");
-    const discardBtn = el("button", { class: "btn btn-ghost btn-small", type: "button" }, "Discard");
+    // Two-step, and the same two-step every other destructive control in the
+    // app uses: this is a participant's one first pass over the screen and a
+    // single slip of Escape must not erase it. It used to be hand-rolled here
+    // with an `.is-active` class that the strip's own teal backing then
+    // flattened into something indistinguishable from Finish beside it;
+    // confirmButton arms in --signal-bad and holds its width while it does.
+    const discardBtn = confirmButton(
+      "Discard",
+      "Really discard?",
+      () => finish(false),
+      "btn btn-ghost btn-small"
+    );
     const controls = el("div", { class: "record-controls" }, who, hint, finishBtn, discardBtn);
     chrome.append(controls);
 
@@ -286,35 +374,19 @@ function waitForStop(
       rafId = requestAnimationFrame(tick);
     };
 
-    // Discarding is two-step: this recording is a participant's one first
-    // pass over the screen, and a single slip of Escape must not erase it.
-    const requestDiscard = () => {
-      if (armed) {
-        finish(false);
-        return;
-      }
-      armed = true;
-      discardBtn.textContent = "Really discard?";
-      discardBtn.classList.add("is-active");
-      disarmTimer = window.setTimeout(() => {
-        armed = false;
-        discardBtn.textContent = "Discard";
-        discardBtn.classList.remove("is-active");
-      }, 3000);
-    };
-
     const onKey = (event: KeyboardEvent) => {
       if (event.code === "Space") {
         event.preventDefault();
         finish(true);
       } else if (event.key === "Escape") {
-        requestDiscard();
+        // Escape arms and fires the same button the mouse does, so the
+        // keyboard cannot reach a one-press discard the pointer cannot.
+        discardBtn.click();
       }
     };
 
     const finish = (completed: boolean) => {
       cancelAnimationFrame(rafId);
-      window.clearTimeout(disarmTimer);
       window.clearInterval(clockTimer);
       offStatus();
       window.removeEventListener("keydown", onKey);
@@ -323,7 +395,6 @@ function waitForStop(
     };
 
     finishBtn.addEventListener("click", () => finish(true));
-    discardBtn.addEventListener("click", requestDiscard);
     window.addEventListener("keydown", onKey);
     // A manual-stop recording has no progress bar to animate, so the frame
     // loop only runs when there is a deadline to draw toward.

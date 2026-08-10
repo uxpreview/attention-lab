@@ -81,6 +81,12 @@ function overlaps(a: Placed, b: Placed): boolean {
  * — the order an annotator would try by hand. */
 const CALLOUT_ANGLES = [-Math.PI / 4, -Math.PI / 2, 0, -(3 * Math.PI) / 4, Math.PI / 4, Math.PI, Math.PI / 2, (3 * Math.PI) / 4];
 
+/** How far out the search for clear space goes, in rings of eight positions.
+ * Six rings hold ~48 labels around one point, well past the density at which a
+ * scanpath is worth reading at all; past that the leader lines would be longer
+ * than the saccades. */
+const MAX_LABEL_RINGS = 6;
+
 /**
  * Places the ordinal for each fixation, avoiding collisions.
  *
@@ -112,18 +118,50 @@ export function layoutOrdinals(circles: OrdinalCircle[], scale = 1): OrdinalLabe
     let leader = false;
 
     if (placed.some((other) => overlaps(spot, other))) {
-      const reach = c.radius + halfHeight + 4;
-      const found = CALLOUT_ANGLES.map((angle) => ({
-        x: c.x + Math.cos(angle) * (reach + halfWidth * Math.abs(Math.cos(angle))),
-        y: c.y + Math.sin(angle) * reach,
+      const base = c.radius + halfHeight + 4;
+      let found: Placed | undefined;
+
+      // Expanding rings rather than one ring and a shrug.
+      //
+      // This used to try the eight callout positions once and then "park it
+      // above the circle anyway" when all eight were taken. On the studies this
+      // tool is built for — a task, a CTA, gaze landing in one place — that
+      // branch is not the rare case, it is the normal one: eight or more
+      // fixations inside one radius, and from the ninth onward every label
+      // landed on top of an earlier one. "10" over "7" reads as "107", and the
+      // ordering, which is the only thing a scanpath says, stopped being
+      // readable at exactly the density that makes a scanpath interesting.
+      //
+      // So each ring steps out by a label height and is rotated off the last by
+      // a fraction of the angular step, which walks outward through the gaps
+      // instead of stacking labels along the same eight spokes. The leader-line
+      // machinery below draws whatever distance this ends up needing.
+      const ringStep = halfHeight * 2 + 6;
+      const twist = Math.PI / CALLOUT_ANGLES.length;
+      for (let ring = 0; ring < MAX_LABEL_RINGS && !found; ring++) {
+        const reach = base + ring * ringStep;
+        found = CALLOUT_ANGLES.map((angle) => {
+          const a = angle + ring * twist;
+          return {
+            x: c.x + Math.cos(a) * (reach + halfWidth * Math.abs(Math.cos(a))),
+            y: c.y + Math.sin(a) * reach,
+            halfWidth,
+            halfHeight,
+          };
+        }).find((candidate) => !placed.some((other) => overlaps(candidate, other)));
+      }
+
+      // Nothing clear even at the outermost ring — only reachable with a truly
+      // absurd pile-up. Park it at the top of that ring, where it is at least
+      // far from the circles: a label that still collides is no worse than the
+      // collision it started with, and dropping the number outright would lose
+      // a step of the sequence.
+      spot = found ?? {
+        x: c.x,
+        y: c.y - (base + (MAX_LABEL_RINGS - 1) * ringStep),
         halfWidth,
         halfHeight,
-      })).find((candidate) => !placed.some((other) => overlaps(candidate, other)));
-
-      // Every position taken: park it above the circle anyway. A label that
-      // still collides is no worse than the collision it started with, and
-      // dropping the number outright would lose a step of the sequence.
-      spot = found ?? { x: c.x, y: c.y - reach, halfWidth, halfHeight };
+      };
       leader = true;
     }
 

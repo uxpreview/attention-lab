@@ -21,6 +21,12 @@ import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/l
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
 import { layoutOrdinals, type OrdinalLabel } from "../analysis/scanpath";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
+import {
+  chromeCanContaminate,
+  controlBandHeight,
+  CONTROL_STRIP_PX,
+  EDGE_TOLERANCE,
+} from "../ui/record";
 import type { RecordingQuality } from "../data/types";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { MedianPoint, OneEuroPoint } from "../tracker/filter";
@@ -47,6 +53,22 @@ function check(name: string, condition: boolean, detail = ""): void {
 
 function section(name: string): void {
   console.log(`\n${name}`);
+}
+
+/** The four channels of a ramp stop, read back out of the CSS string the
+ * legend is built from — so these assertions are made against exactly what the
+ * legend promises, not against a private copy of the table. */
+function rampParts(t: number): [number, number, number, number] {
+  const parts = rampColour(t).match(/[\d.]+/g);
+  if (!parts || parts.length < 4) throw new Error(`rampColour(${t}) is not rgba: ${rampColour(t)}`);
+  return [Number(parts[0]), Number(parts[1]), Number(parts[2]), Number(parts[3])];
+}
+function rampRgb(t: number): [number, number, number] {
+  const [r, g, b] = rampParts(t);
+  return [r, g, b];
+}
+function rampAlpha(t: number): number {
+  return rampParts(t)[3];
 }
 
 /** Deterministic PRNG so a failure is reproducible. */
@@ -646,7 +668,90 @@ section("Heatmap overlay painting");
   paintField(field, heat, "heat", scale, 0.72);
   check("heat leaves unlooked regions transparent", alphaOf(heat, 5) === 0);
   check("heat is strongest at the hottest point", alphaOf(heat, 0) > alphaOf(heat, 2));
-  check("heat reaches the hot end of the ramp", heat[0] === 255 && heat[2] === 0);
+
+  // The jet ramp this replaced painted its coldest stop a saturated blue at a
+  // flat 0.72 opacity, so a region with the faintest trace of gaze carried as
+  // much visual weight as the hot core: a reader's eye reported attention where
+  // there was effectively none. The floor of the ramp has to fade out, and it
+  // has to fade out *in the lookup table*, which is what the legend reads.
+  check("the cold floor of the ramp is fully transparent", rampAlpha(0) === 0);
+  check(
+    "the ramp's alpha rises with attention",
+    Array.from({ length: 32 }, (_, i) => rampAlpha(i / 31)).every(
+      (a, i, all) => i === 0 || a > all[i - 1]
+    )
+  );
+  check("the hot end of the ramp is opaque", rampAlpha(1) === 1);
+  // A cold-blue floor is the specific failure; nothing in the ramp may be cool.
+  const cool = Array.from({ length: 64 }, (_, i) => rampRgb(i / 63)).filter(
+    ([r, g, b]) => b >= r || g > r
+  );
+  check("no stop in the ramp is a cool colour", cool.length === 0, `${cool.length} cool stops`);
+  check(
+    "the ramp passes through the brand's vermillion",
+    Array.from({ length: 256 }, (_, i) => rampRgb(i / 255)).some(
+      ([r, g, b]) => Math.abs(r - 231) <= 3 && Math.abs(g - 61) <= 6 && b <= 8
+    )
+  );
+  // The overlay's own opacity still has the last word: the ramp scales it
+  // rather than replacing it.
+  const faint = new Uint8ClampedArray(field.length * 4);
+  paintField(field, faint, "heat", scale, 0.3);
+  check("overlay opacity still scales the ramp", alphaOf(faint, 0) < alphaOf(heat, 0));
+}
+
+// --- Recording stage geometry --------------------------------------------
+
+section("Recording chrome stays out of the measured rect");
+{
+  // The controls used to be absolutely positioned over the stimulus, and every
+  // gaze sample is normalised against the stimulus rect: a participant looking
+  // at Finish or Discard was recorded as looking at whatever the chrome
+  // covered. The band below the stimulus is solved against the same edge
+  // tolerance the sample filter uses, so a look at the chrome falls outside the
+  // kept range instead of being clamped onto the footer.
+  const heights = [700, 720, 768, 800, 900, 1024, 1080, 1200, 1440, 1600, 2160];
+
+  /** What runRecording does to a sample at screen y, for a stage of this
+   * height: normalise against the letterboxed stimulus rect. */
+  const normalisedY = (screenY: number, stageHeight: number): number =>
+    screenY / (stageHeight - controlBandHeight(stageHeight));
+  const kept = (ny: number): boolean => ny <= 1 + EDGE_TOLERANCE;
+
+  const contaminating = heights.filter((h) => chromeCanContaminate(h));
+  check(
+    "no stage height lets the control strip reach the measured rect",
+    contaminating.length === 0,
+    contaminating.length ? `fails at ${contaminating.join(", ")}px` : `${heights.length} heights`
+  );
+
+  const leaks = heights.filter((h) => kept(normalisedY(h - CONTROL_STRIP_PX, h)));
+  check(
+    "gaze on the top edge of the controls is dropped, not clamped to the footer",
+    leaks.length === 0,
+    leaks.length ? `leaks at ${leaks.join(", ")}px` : "every height"
+  );
+  const bottomLeaks = heights.filter((h) => kept(normalisedY(h - 1, h)));
+  check("gaze on the bottom edge of the screen is dropped too", bottomLeaks.length === 0);
+
+  // The band still has to be a band, not a letterbox that eats the stimulus.
+  const band = controlBandHeight(900);
+  check("the band fits the control strip", band > CONTROL_STRIP_PX, `${band}px at 900px`);
+  check(
+    "the band costs the stimulus under a seventh of the stage",
+    band / 900 < 0.14,
+    `${((band / 900) * 100).toFixed(1)}% of a 900px stage`
+  );
+  check(
+    "a taller stage reserves a proportionally larger band",
+    controlBandHeight(1440) > controlBandHeight(900)
+  );
+  // The last row the participant can actually look at still reaches the
+  // heatmap: the fix must not start throwing away real edge gaze.
+  check(
+    "gaze on the last row of the stimulus is still kept",
+    kept(normalisedY(900 - controlBandHeight(900) - 1, 900))
+  );
 }
 
 // --- AOIs ----------------------------------------------------------------
@@ -784,9 +889,31 @@ section("Scanpath ordinal placement");
   const stacked = layoutOrdinals(Array.from({ length: 8 }, () => ({ x: 150, y: 150, radius: 16 })));
   check("perfectly co-located fixations all keep a number", stacked.length === 8);
   check(
-    "perfectly co-located fixations are mostly separated",
-    countCollisions(stacked) < 4,
+    "perfectly co-located fixations are separated",
+    countCollisions(stacked) === 0,
     `${countCollisions(stacked)} collisions across 8 labels`
+  );
+
+  // Past eight, one ring of callout positions is exhausted. This is the case
+  // the placer used to give up on — "every position taken: park it above the
+  // circle anyway" — which printed 10 over 7 as "107" on exactly the studies
+  // this tool is for: one task, one CTA, every fixation in one place.
+  const pileUp = layoutOrdinals(
+    Array.from({ length: 14 }, (_, i) => ({ x: 300 + (i % 3), y: 300 - (i % 2), radius: 20 }))
+  );
+  check("a fourteen-deep pile-up keeps every ordinal", pileUp.length === 14);
+  check(
+    "a fourteen-deep pile-up has no unreadable pairs",
+    countCollisions(pileUp) === 0,
+    `${countCollisions(pileUp)} collisions across 14 labels`
+  );
+  // Displaced labels have to stay attached to something a leader line can
+  // reach; a number parked half a screen away belongs to nothing.
+  const furthest = Math.max(...pileUp.map((l) => Math.hypot(l.x - 300, l.y - 300)));
+  check(
+    "displaced ordinals stay near the cluster they belong to",
+    furthest < 220,
+    `${furthest.toFixed(0)}px from the cluster`
   );
 }
 
@@ -804,6 +931,9 @@ section("Overlay legends");
     "the heat legend's hot end matches the ramp",
     heat.stops?.[heat.stops.length - 1] === rampColour(1)
   );
+  // The legend has to carry the ramp's transparency, or the strip under the
+  // stage advertises a solid floor over regions the overlay leaves clear.
+  check("the heat legend's cold end is transparent", heat.stops?.[0].endsWith(", 0.000)") === true);
   check("the heat legend names its units", /fixation duration/i.test(heat.note));
   check("the heat legend says the scale is relative", /relative to this selection/i.test(heat.note));
 

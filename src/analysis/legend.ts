@@ -5,8 +5,9 @@ import { scanpathColour } from "./scanpath";
  * What each overlay's colours mean, described once.
  *
  * Every commercial tool ships a scale strip, and for a good reason: a
- * saturated blue→red ramp with no key is a picture, not a measurement. The
- * spec below is built from the same lookup tables the pixels come from, so a
+ * coloured wash with no key is a picture, not a measurement. The spec below is
+ * built from the same lookup tables the pixels come from — alpha included, so
+ * the strip fades out at the cold end exactly where the overlay does — and a
  * change to RAMP or to the scanpath hue sweep moves the legend with it. It is
  * deliberately renderer-agnostic — the results screen draws it as DOM, the PNG
  * export draws the same spec into the file's caption band, and neither one
@@ -96,17 +97,21 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         title: "Fixation time per area",
         stops: heatStops(),
         banded: false,
-        minLabel: "Barely looked at",
+        minLabel: "Clear: no attention",
         maxLabel: "Most looked at",
         swatches: null,
-        note: "Colour is total fixation duration (ms) summed over the selected participants, scaled so the 98th percentile is the hot end. The scale is relative to this selection — colours are not comparable between studies.",
+        // The percentile named here is the one renderHeatmap actually defaults
+        // to, and it is a percentile of the per-blob peaks rather than of the
+        // pixels — see fieldCeiling. It said "98th" for a clamp that no longer
+        // exists.
+        note: "Colour is total fixation duration (ms) summed over the selected participants, scaled so the 90th percentile of the attention peaks saturates the hot end. Areas nobody fixated are left clear rather than tinted, so the paint is the finding. The scale is relative to this selection — colours are not comparable between studies.",
       };
     case "contour":
       return {
         title: "Fixation time per area",
         stops: contourBandColours(),
         banded: true,
-        minLabel: "Barely looked at",
+        minLabel: "Lowest drawn band",
         maxLabel: "Most looked at",
         swatches: null,
         note: "The same fixation-duration scale as the heatmap, quantised into equal bands so a region can be cited by band. Below the first band is left clear.",

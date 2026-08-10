@@ -123,6 +123,26 @@ export function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+/**
+ * Coarse on purpose: "3 days ago" is what a researcher scans for, and a
+ * to-the-minute stamp on a list of ten studies is noise. Exact time is
+ * available where it matters, as the title on the element this labels.
+ *
+ * Shared by the study list and the recordings list rather than duplicated:
+ * "yesterday" on one screen and "1 day ago" on the other is the kind of drift
+ * that makes two lists look like two products.
+ */
+export function relativeDay(timestamp: number, now = Date.now()): string {
+  const days = Math.floor((now - timestamp) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
+  const years = Math.round(days / 365);
+  return `${years} year${years === 1 ? "" : "s"} ago`;
+}
+
 /** Waits for the next paint, so measurements happen after layout settles. */
 export function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));

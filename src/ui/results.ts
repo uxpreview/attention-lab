@@ -24,7 +24,15 @@ import {
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
 import { appBar } from "./chrome";
-import { clear, confirmButton, el, formatMs, formatPercent, nextFrame } from "./dom";
+import {
+  clear,
+  confirmButton,
+  el,
+  formatMs,
+  formatPercent,
+  nextFrame,
+  relativeDay,
+} from "./dom";
 import { legendElement } from "./legend";
 
 type ViewMode = OverlayMode;
@@ -74,6 +82,12 @@ export async function renderResults(
   let mode: ViewMode = "heat";
   let selected: string | "all" = "all";
   let drawingAoi = false;
+  /** Whether the region layer is drawn over the stimulus at all. Regions are a
+   * separate layer of annotation from the attention data, and the overlay
+   * people screenshot into a deck is usually the clean one — Tobii keeps AOI
+   * visibility on its own switch for the same reason. Defaults on, because a
+   * region you cannot see is a region you forget you drew. */
+  let showAois = true;
 
   // A recording below the quality threshold is not evidence, and the app's own
   // bench notes say why: a bad calibration "looks exactly like data". Folding a
@@ -128,14 +142,20 @@ export async function renderResults(
     );
   };
 
+  /** The "nothing recorded yet" bar. It lives *under* the stage, not on it.
+   * Floated inside the stage it was a card with a border and no shadow sitting
+   * over the middle of a short wireframe — a modal that had lost its backdrop,
+   * covering the very stimulus the regions are meant to be drawn on. Below the
+   * stage it reads as what it is: a footer bar belonging to the stage, with the
+   * action in it. */
+  let emptyStrip: HTMLElement | null = null;
+
   if (study.stimulus.kind === "image") {
     objectUrl = URL.createObjectURL(study.stimulus.blob);
     stimulusImage = el("img", { class: "results-image", src: objectUrl, alt: "" });
     stage.append(stimulusImage);
     if (!hasRecordings) {
-      // A card at the foot of the stage rather than an opaque sheet over it:
-      // the sheet hid the very stimulus the regions are meant to be drawn on.
-      stage.append(el("div", { class: "stage-empty" }, el("p", {}, emptyLine), runAction()));
+      emptyStrip = el("div", { class: "stage-empty" }, el("p", {}, emptyLine), runAction());
     }
   } else {
     stage.append(
@@ -165,11 +185,18 @@ export async function renderResults(
   // stage: the view, who is in it, and the headline numbers for that selection.
   const dataBlock = el("div", { class: "results-data" });
   const sidebar = el("aside", { class: "results-sidebar" });
+  // The data block is a child of the *layout*, not of the main column, and
+  // spans both grid tracks. As a child of the main column it left the rail
+  // stranded: the sidebar ended level with the stage while the tables ran on
+  // for another 437px beside a column of empty cream, and every recording added
+  // made the gap taller. Spanning, the tables get the full measure and the rail
+  // only has to be as tall as the thing it governs.
   const layout = el(
     "div",
     { class: "results-layout" },
-    el("div", { class: "results-main" }, stage, legend, dataBlock),
-    sidebar
+    el("div", { class: "results-main" }, stage, emptyStrip, legend),
+    sidebar,
+    dataBlock
   );
 
   // Export is the whole point of a research tool, so it is a persistent
@@ -190,6 +217,28 @@ export async function renderResults(
     el("span", { class: "menu-caret", "aria-hidden": "true" }, "▾")
   );
   const exportBar = el("div", { class: "results-actions" }, exportToggle, exportMenu);
+
+  /**
+   * The count in the header, which has to agree with the rail three inches to
+   * its right.
+   *
+   * It read `recordings.length` while the sidebar's participant list read the
+   * active set, so a study with one auto-excluded low-signal session opened on
+   * "4 recordings" beside "All participants (3)": two contradictory totals, both
+   * correct, with the reconciliation buried in a note further down. Saying "3 of
+   * 4" here makes that note a confirmation instead of a correction.
+   */
+  const countPill = el("span", { class: "pill pill-count" });
+  function paintCountPill(): void {
+    const total = recordings.length;
+    const kept = aggregateSet().length;
+    countPill.textContent =
+      kept === total
+        ? `${total} recording${total === 1 ? "" : "s"}`
+        : `${kept} of ${total} recordings`;
+    countPill.title =
+      kept === total ? "" : "Low-signal recordings are excluded from the aggregate";
+  }
 
   function exportItem(label: string, key: string, run: () => void): HTMLButtonElement {
     return el(
@@ -234,11 +283,7 @@ export async function renderResults(
       { class: "results-title" },
       el("button", { class: "btn btn-ghost btn-small", type: "button", onclick: onBack }, "← Studies"),
       el("h1", {}, study.name),
-      el(
-        "span",
-        { class: "pill pill-count" },
-        `${recordings.length} recording${recordings.length === 1 ? "" : "s"}`
-      )
+      countPill
     ),
     hasRecordings ? exportBar : null
   );
@@ -284,11 +329,18 @@ export async function renderResults(
 
   let analysed = analyse();
 
-  const activeSet = (): AnalysedRecording[] => {
-    if (selected !== "all") return analysed.filter((a) => a.recording.id === selected);
-    if (!excludingLowSignal()) return analysed;
-    return analysed.filter((a) => !isLowSignal(a.recording.quality));
-  };
+  /** Everything the "All participants" scope covers, whatever is selected right
+   * now. The header count and the scope option's own count are facts about the
+   * study, not about the current filter — reading them off activeSet() made the
+   * option label say "All participants (1)" the moment one participant was
+   * picked. */
+  const aggregateSet = (): AnalysedRecording[] =>
+    excludingLowSignal() ? analysed.filter((a) => !isLowSignal(a.recording.quality)) : analysed;
+
+  const activeSet = (): AnalysedRecording[] =>
+    selected === "all"
+      ? aggregateSet()
+      : analysed.filter((a) => a.recording.id === selected);
 
   const draw = async (): Promise<void> => {
     await nextFrame();
@@ -437,6 +489,9 @@ export async function renderResults(
   }
 
   function renderSidebar(): void {
+    // The header count is a function of the same state the rail is, so it is
+    // repainted from the same place rather than left to drift.
+    paintCountPill();
     rebuild(sidebar, buildSidebar);
   }
 
@@ -447,6 +502,35 @@ export async function renderResults(
     });
   }
 
+  /** Shows or hides the whole region layer. Drawing is switched off with it:
+   * a crosshair over a layer nothing appears on is a control that lies. */
+  function setAoisVisible(visible: boolean): void {
+    showAois = visible;
+    aoiLayer.classList.toggle("is-hidden", !visible);
+    if (!visible && drawingAoi) {
+      drawingAoi = false;
+      aoiLayer.classList.remove("is-drawing");
+    }
+  }
+
+  function regionToggle(): HTMLElement {
+    return el(
+      "label",
+      { class: "checkbox checkbox-quiet" },
+      el("input", {
+        type: "checkbox",
+        "data-key": "show-aois",
+        ...(showAois ? { checked: true } : {}),
+        onchange: (event: Event) => {
+          setAoisVisible((event.target as HTMLInputElement).checked);
+          renderSidebar();
+          renderData();
+        },
+      }),
+      el("span", {}, "Show regions")
+    );
+  }
+
   function buildSidebar(): void {
     if (!hasRecordings) {
       sidebar.append(
@@ -455,7 +539,8 @@ export async function renderResults(
           "p",
           { class: "muted" },
           "Heatmap, spotlight, contour and scanpath views arrive with the first recording. Regions drawn now apply to every session run afterwards."
-        )
+        ),
+        regionToggle()
       );
       return;
     }
@@ -483,7 +568,8 @@ export async function renderResults(
             OVERLAY_LABELS[value]
           )
         )
-      )
+      ),
+      regionToggle()
     );
 
     const participantSelect = el(
@@ -499,7 +585,7 @@ export async function renderResults(
           renderData();
         },
       },
-      el("option", { value: "all" }, `All participants (${activeSet().length})`),
+      el("option", { value: "all" }, `All participants (${aggregateSet().length})`),
       ...analysed.map((a) =>
         el(
           "option",
@@ -619,6 +705,13 @@ export async function renderResults(
             "data-key": "aoi-draw",
             onclick: () => {
               drawingAoi = !drawingAoi;
+              // Drawing implies looking: reaching for + Draw with the layer
+              // hidden turns it back on rather than dropping the new box into
+              // a layer the operator cannot see.
+              if (drawingAoi && !showAois) {
+                setAoisVisible(true);
+                renderSidebar();
+              }
               aoiLayer.classList.toggle("is-drawing", drawingAoi);
               renderData();
             },
@@ -757,15 +850,24 @@ export async function renderResults(
               // palette's one "this is fine" signal on it five rows running —
               // which is what drained the meaning from the green on "Tracking
               // ratio 90%" in the summary above.
+              // When a recording was made, and how long it ran. Two sessions
+              // two days apart were indistinguishable here, and a researcher
+              // iterating on the same wireframe has to know which round a
+              // recording came from before trusting an aggregate. Coarse in the
+              // line, exact in the tooltip.
               el(
                 "span",
-                { class: "recording-stats" },
+                {
+                  class: "recording-stats",
+                  title: new Date(a.recording.createdAt).toLocaleString(),
+                },
                 `${a.fixations.length} fixations · `,
                 el(
                   "span",
                   { class: `signal-${grade}` },
                   `${formatPercent(a.recording.quality.trackingRatio)} tracked`
-                )
+                ),
+                ` · ${formatMs(recordingLength(a.recording))} · ${relativeDay(a.recording.createdAt)}`
               )
             ),
             recordingDeleteButton(a.recording)
@@ -873,6 +975,12 @@ function statRow(label: string, value: string, grade?: QualityGrade): HTMLElemen
     el("span", {}, label),
     el("strong", { class: grade ? `signal-${grade}` : "" }, value)
   );
+}
+
+/** How long the recording ran. Sample times are stored relative to the first
+ * sample, so the last one is the length of the pass over the screen. */
+function recordingLength(recording: Recording): number {
+  return recording.points.length > 0 ? recording.points[recording.points.length - 1].t : 0;
 }
 
 function averageOf(values: number[]): number | null {
