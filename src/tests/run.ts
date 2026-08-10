@@ -915,6 +915,52 @@ section("Scanpath ordinal placement");
     furthest < 220,
     `${furthest.toFixed(0)}px from the cluster`
   );
+
+  // Edge clamping. Without it a fixation near the top of the stimulus pushed
+  // its number off the drawing surface — ordinal "2" arrived sliced in half by
+  // the canvas edge — and a scanpath that loses a step loses the only thing it
+  // says.
+  const bounds = { width: 400, height: 300 };
+  const edges = layoutOrdinals(
+    [
+      { x: 4, y: 3, radius: 22 },
+      { x: 396, y: 297, radius: 22 },
+      { x: 6, y: 5, radius: 22 },
+      { x: 200, y: 2, radius: 22 },
+    ],
+    1,
+    bounds
+  );
+  check(
+    "every ordinal stays inside the canvas",
+    edges.every(
+      (l) =>
+        l.x - l.halfWidth >= -0.001 &&
+        l.x + l.halfWidth <= bounds.width + 0.001 &&
+        l.y - l.halfHeight >= -0.001 &&
+        l.y + l.halfHeight <= bounds.height + 0.001
+    )
+  );
+  check(
+    "clamped ordinals still do not collide",
+    countCollisions(edges) === 0,
+    `${countCollisions(edges)} collisions at the canvas edge`
+  );
+  // A number that had to leave its circle is drawn at the legibility floor, so
+  // a displaced "36" recedes behind an ordinal sitting inside its own circle
+  // rather than competing with it.
+  const displaced = edges.filter((l) => l.leader);
+  check(
+    "displaced ordinals drop to the minimum size",
+    displaced.length > 0 && displaced.every((l) => l.fontSize < edges[0].fontSize),
+    `${displaced.length} displaced`
+  );
+  // Unbounded placement is unchanged: the tests above depend on it, and so
+  // does any caller that has no canvas to clamp against.
+  check(
+    "without bounds nothing is clamped",
+    layoutOrdinals([{ x: -50, y: -50, radius: 20 }])[0].x === -50
+  );
 }
 
 // --- Legends -------------------------------------------------------------

@@ -56,6 +56,13 @@ export interface OrdinalLabel {
 
 type Placed = Pick<OrdinalLabel, "x" | "y" | "halfWidth" | "halfHeight">;
 
+/** The drawing surface an ordinal has to stay inside, in the same pixels as
+ * the circles. Optional: the pure placement tests have no canvas. */
+export interface OrdinalBounds {
+  width: number;
+  height: number;
+}
+
 /** Ordinal size bounds, in CSS pixels before {@link ScanpathOptions.scale}.
  * The floor is the payload's legibility floor: the order of the sequence is the
  * only thing a scanpath says, and a numeral that needs leaning in to read says
@@ -101,23 +108,54 @@ const MAX_LABEL_RINGS = 6;
  * Pure, and exported, because this is the part worth testing — the drawing
  * around it is not.
  */
-export function layoutOrdinals(circles: OrdinalCircle[], scale = 1): OrdinalLabel[] {
+export function layoutOrdinals(
+  circles: OrdinalCircle[],
+  scale = 1,
+  bounds?: OrdinalBounds
+): OrdinalLabel[] {
   const placed: Placed[] = [];
   const out: OrdinalLabel[] = [];
 
+  /** Keeps a label wholly on the drawing surface. Without this a fixation near
+   * an edge pushed its number off the canvas — ordinal "2" arrived sliced in
+   * half by the top of the stimulus — and the sequence lost a step at exactly
+   * the place a reader is trying to follow it. */
+  const clamp = (spot: Placed): Placed => {
+    if (!bounds) return spot;
+    const lockX = Math.max(spot.halfWidth, bounds.width - spot.halfWidth);
+    const lockY = Math.max(spot.halfHeight, bounds.height - spot.halfHeight);
+    return {
+      ...spot,
+      x: Math.min(Math.max(spot.x, spot.halfWidth), lockX),
+      y: Math.min(Math.max(spot.y, spot.halfHeight), lockY),
+    };
+  };
+
   for (let i = 0; i < circles.length; i++) {
     const c = circles[i];
-    const fontSize = Math.max(
+    const text = String(i + 1);
+    const centreFont = Math.max(
       MIN_ORDINAL_PX * scale,
       Math.min(MAX_ORDINAL_PX * scale, c.radius * 0.85)
     );
-    const halfWidth = labelHalfWidth(String(i + 1), fontSize);
-    const halfHeight = fontSize * 0.55;
 
-    let spot: Placed = { x: c.x, y: c.y, halfWidth, halfHeight };
+    let fontSize = centreFont;
+    let halfWidth = labelHalfWidth(text, fontSize);
+    let halfHeight = fontSize * 0.55;
+
+    let spot: Placed = clamp({ x: c.x, y: c.y, halfWidth, halfHeight });
     let leader = false;
 
     if (placed.some((other) => overlaps(spot, other))) {
+      // A displaced number is drawn at the floor size, not at its circle's
+      // size. A "36" sitting 60px away from its circle at the same weight as a
+      // number inside one reads as a loose digit in a field of loose digits;
+      // at the legibility floor it recedes behind the in-circle ordinals and
+      // the path stays the figure.
+      fontSize = MIN_ORDINAL_PX * scale;
+      halfWidth = labelHalfWidth(text, fontSize);
+      halfHeight = fontSize * 0.55;
+
       const base = c.radius + halfHeight + 4;
       let found: Placed | undefined;
 
@@ -142,12 +180,15 @@ export function layoutOrdinals(circles: OrdinalCircle[], scale = 1): OrdinalLabe
         const reach = base + ring * ringStep;
         found = CALLOUT_ANGLES.map((angle) => {
           const a = angle + ring * twist;
-          return {
+          // Clamped *before* the overlap test, or a candidate that passes the
+          // test off-canvas is then pulled back on top of a label that was
+          // already there.
+          return clamp({
             x: c.x + Math.cos(a) * (reach + halfWidth * Math.abs(Math.cos(a))),
             y: c.y + Math.sin(a) * reach,
             halfWidth,
             halfHeight,
-          };
+          });
         }).find((candidate) => !placed.some((other) => overlaps(candidate, other)));
       }
 
@@ -156,12 +197,14 @@ export function layoutOrdinals(circles: OrdinalCircle[], scale = 1): OrdinalLabe
       // far from the circles: a label that still collides is no worse than the
       // collision it started with, and dropping the number outright would lose
       // a step of the sequence.
-      spot = found ?? {
-        x: c.x,
-        y: c.y - (base + (MAX_LABEL_RINGS - 1) * ringStep),
-        halfWidth,
-        halfHeight,
-      };
+      spot =
+        found ??
+        clamp({
+          x: c.x,
+          y: c.y - (base + (MAX_LABEL_RINGS - 1) * ringStep),
+          halfWidth,
+          halfHeight,
+        });
       leader = true;
     }
 
@@ -254,7 +297,7 @@ export function renderScanpath(
 
   // Ordinals in a second pass, so a later circle cannot paint over an earlier
   // number.
-  const labels = layoutOrdinals(circles, scale);
+  const labels = layoutOrdinals(circles, scale, { width, height });
 
   for (let i = 0; i < circles.length; i++) {
     const c = circles[i];

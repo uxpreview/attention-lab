@@ -20,6 +20,7 @@ import {
   exportOverlayPng,
   exportRawCsv,
   exportStudyJson,
+  type ExportScope,
 } from "../data/export";
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
@@ -399,7 +400,7 @@ export async function renderResults(
       legend.append(legendElement(mode, keyed.map((a) => a.recording.participant)));
     }
 
-    renderAoiBoxes(aoiLayer, aois, onAoiChange);
+    renderAoiBoxes(aoiLayer, aois);
   };
 
   const persistAois = (): void => {
@@ -531,6 +532,48 @@ export async function renderResults(
     );
   }
 
+  /**
+   * "Time to first fixation", defined so that it is not zero by construction.
+   *
+   * The row used to be `summarise(everyFixation, 0).timeToFirstFixation`, i.e.
+   * the start of the first fixation of the first recording measured from that
+   * recording's own t=0 — which is a few tens of milliseconds by definition,
+   * because the participant is already looking at the screen when capture
+   * begins. It rendered "0ms" for every study and every participant, directly
+   * above two numbers that are correct and graded.
+   *
+   * What a researcher means by TTFF is time to first fixation *on something*.
+   * With regions drawn, that is computable: per recording, the earliest
+   * fixation landing inside any region, averaged over the recordings that found
+   * one. With no regions there is no "something", so the row is not shown at
+   * all rather than shown as a zero.
+   */
+  function timeToFirstRegionRow(set: AnalysedRecording[]): HTMLElement[] {
+    if (aois.length === 0) return [];
+
+    const firsts = set
+      .map((a) => {
+        const times = a.aoiResults
+          .map((r) => r.timeToFirstFixation)
+          .filter((t): t is number => t !== null);
+        return times.length > 0 ? Math.min(...times) : null;
+      })
+      .filter((t): t is number => t !== null);
+
+    const found = firsts.length;
+    const mean = averageOf(firsts);
+    return [
+      statRow(
+        "Time to first region",
+        mean === null ? "—" : formatMs(mean),
+        undefined,
+        mean === null
+          ? "No participant in this selection fixated any region."
+          : `Mean over the ${found} of ${set.length} recording${set.length === 1 ? "" : "s"} whose gaze reached a region.`
+      ),
+    ];
+  }
+
   function buildSidebar(): void {
     if (!hasRecordings) {
       sidebar.append(
@@ -632,31 +675,45 @@ export async function renderResults(
       );
     }
 
-    if (mode === "scanpath" && selected === "all" && analysed.length > 1) {
+    // What the stage is actually drawing, which is not always the whole
+    // selection: a scanpath is one person's path by construction. Both the note
+    // and the numbers below are scoped to it — the note used to name
+    // `analysed[0]` while the draw path used `activeSet()[0]`, so with the
+    // first recording auto-excluded as low signal it captioned the picture with
+    // somebody else's name, and the rail reported the 4-participant aggregate
+    // ("Fixations 110") beside a picture of 36.
+    const set = activeSet();
+    const soloScanpath = mode === "scanpath" && selected === "all" && set.length > 1;
+    const statSet = soloScanpath ? set.slice(0, 1) : set;
+
+    if (soloScanpath) {
       sidebar.append(
         el(
           "p",
           { class: "note" },
-          `Scanpaths are per-person. Showing ${analysed[0].recording.participant}. Pick a participant to see others.`
+          `Scanpaths are per-person. Showing ${statSet[0].recording.participant}. Pick a participant to see others.`
         )
       );
     }
-
-    // Quality + summary stats
-    const set = activeSet();
-    const allFixations = set.flatMap((a) => a.fixations);
-    const stats = summarise(allFixations, 0);
+    const stats = summarise(
+      statSet.flatMap((a) => a.fixations),
+      0
+    );
     const meanValidation = averageOf(
-      set.map((a) => a.recording.quality.validationError).filter((v): v is number => v !== null)
+      statSet.map((a) => a.recording.quality.validationError).filter((v): v is number => v !== null)
     );
 
-    const meanTracking = averageOf(set.map((a) => a.recording.quality.trackingRatio)) ?? 0;
+    const meanTracking = averageOf(statSet.map((a) => a.recording.quality.trackingRatio)) ?? 0;
 
     sidebar.append(
-      el("h3", {}, "Summary"),
+      el(
+        "h3",
+        {},
+        soloScanpath ? `Summary — ${statSet[0].recording.participant}` : "Summary"
+      ),
       statRow("Fixations", String(stats.fixationCount)),
       statRow("Mean fixation", formatMs(stats.meanFixationDuration)),
-      statRow("Time to first fixation", formatMs(stats.timeToFirstFixation)),
+      ...timeToFirstRegionRow(statSet),
       // The two quality numbers wear their grade. Reporting a blended 69%
       // tracked in the same grey as a clean 91% is what let a broken session
       // pass for a finding.
@@ -689,6 +746,21 @@ export async function renderResults(
   /** Regions and their numbers, under the stage where there is room for them
    * to be a table rather than four 50px columns squeezed into a rail. */
   function aoiSection(): HTMLElement {
+    /**
+     * A URL study with no recordings has nothing to draw on.
+     *
+     * The stage is a cream placeholder printing the address; arming the
+     * crosshair over it let regions be committed whose coordinates are
+     * normalised against that placeholder rather than against any page a
+     * participant will ever see. This screen already refuses to do that with
+     * the region layer's own visibility switch — "a crosshair over a layer
+     * nothing appears on is a control that lies" — and the same is true of a
+     * crosshair over a layer with no stimulus behind it.
+     */
+    const noStimulusYet = study.stimulus.kind === "url" && !hasRecordings;
+    const drawBlockedReason =
+      "Run a session first — regions on a live page are anchored to the recorded viewport.";
+
     const section = el(
       "section",
       { class: "results-block" },
@@ -701,6 +773,8 @@ export async function renderResults(
           {
             class: `btn btn-small ${drawingAoi ? "is-active" : ""}`,
             type: "button",
+            disabled: noStimulusYet,
+            title: noStimulusYet ? drawBlockedReason : null,
             "aria-pressed": drawingAoi ? "true" : "false",
             "data-key": "aoi-draw",
             onclick: () => {
@@ -723,7 +797,13 @@ export async function renderResults(
 
     if (aois.length === 0) {
       section.append(
-        el("p", { class: "muted" }, "Draw a box over the stimulus to measure attention on it.")
+        el(
+          "p",
+          { class: "muted" },
+          noStimulusYet
+            ? drawBlockedReason
+            : "Draw a box over the stimulus to measure attention on it."
+        )
       );
       return section;
     }
@@ -743,6 +823,10 @@ export async function renderResults(
           el(
             "tr",
             {},
+            // The ordinal is the whole link between this table and the stage:
+            // five hand-drawn boxes are five identical rectangles until each
+            // one wears the number of its row.
+            el("th", { class: "col-ordinal" }, el("span", { class: "sr-only" }, "Number")),
             el("th", {}, "Region"),
             // Without recordings these columns would be four columns of zeroes
             // presented as measurements.
@@ -752,13 +836,14 @@ export async function renderResults(
             // whose whole claim is that it explains its own numbers.
             hasRecordings
               ? el("th", {}, el("abbr", { title: "Time to first fixation" }, "TTFF"))
-              : null
+              : null,
+            el("th", { class: "col-action" }, el("span", { class: "sr-only" }, "Remove"))
           )
         ),
         el(
           "tbody",
           {},
-          ...aggregates.map((agg) =>
+          ...aggregates.map((agg, index) =>
             el(
               "tr",
               {
@@ -771,6 +856,7 @@ export async function renderResults(
                 onfocusin: () => highlightAoi(agg.aoiId, true),
                 onfocusout: () => highlightAoi(agg.aoiId, false),
               },
+              el("td", { class: "cell-ordinal" }, el("span", { class: "ordinal-chip" }, String(index + 1))),
               el(
                 "td",
                 { class: "cell-name" },
@@ -787,7 +873,7 @@ export async function renderResults(
                       analysed = analyse();
                       // A rename moves no gaze: refresh the on-stage box
                       // labels and skip the heatmap repaint entirely.
-                      renderAoiBoxes(aoiLayer, aois, onAoiChange);
+                      renderAoiBoxes(aoiLayer, aois);
                     }
                   },
                 })
@@ -802,7 +888,8 @@ export async function renderResults(
                       ? "—"
                       : formatMs(agg.meanTimeToFirstFixation)
                   )
-                : null
+                : null,
+              el("td", { class: "cell-action" }, aoiDeleteButton(agg.aoiId, agg.label))
             )
           )
         )
@@ -877,6 +964,27 @@ export async function renderResults(
     );
   }
 
+  /**
+   * Removing a region, as a labelled two-step control in its own table row.
+   *
+   * It used to be a vermillion × that faded in under passive hover anywhere on
+   * the box, wired straight to a splice: the stimulus is most of the screen, so
+   * a mouse merely crossing it parked a one-click, no-confirm delete under the
+   * cursor. Regions are hand-drawn work that persists to storage, and every
+   * other destructive action in this app — deleting a study, a recording, a
+   * session mid-capture — is a labelled confirm. This one is now too.
+   */
+  function aoiDeleteButton(aoiId: string, label: string): HTMLButtonElement {
+    const btn = confirmButton("Remove", "Really remove?", () => {
+      const index = aois.findIndex((a) => a.id === aoiId);
+      if (index >= 0) aois.splice(index, 1);
+      onAoiChange();
+    });
+    btn.setAttribute("aria-label", `Remove region ${label}`);
+    btn.dataset.key = `aoi-remove-${aoiId}`;
+    return btn;
+  }
+
   function recordingDeleteButton(recording: Recording): HTMLButtonElement {
     // A recorded session cannot be re-recorded, so this is the one place a
     // single mis-click could destroy a participant's time.
@@ -903,6 +1011,37 @@ export async function renderResults(
       ?.classList.toggle("is-linked", on);
   }
 
+  /**
+   * What the file covers, in the words the screen uses.
+   *
+   * Exports used to be handed `analysed` — every recording — while the screen
+   * they were triggered from was reporting on `activeSet()`. A study whose
+   * header pill read "4 of 5 recordings" and whose table read 75% produced a
+   * file saying 0.600, and nothing in the file hinted that the two were
+   * counting different people. Every CSV now covers exactly what the stage and
+   * the tables cover, and says which set that was.
+   */
+  function exportScope(): ExportScope {
+    const total = recordings.length;
+    if (selected !== "all") {
+      const one = activeSet()[0]?.recording.participant ?? "—";
+      return { note: `Single participant: ${one} — 1 of ${total} recordings` };
+    }
+    const flagged = flaggedRecordings().length;
+    const kept = aggregateSet().length;
+    if (excludingLowSignal()) {
+      return {
+        note: `All participants, low-signal excluded — ${kept} of ${total} recordings (${flagged} below the quality threshold)`,
+      };
+    }
+    if (flagged > 0) {
+      return {
+        note: `All participants, low-signal included — ${total} of ${total} recordings (${flagged} below the quality threshold)`,
+      };
+    }
+    return { note: `All participants — ${total} of ${total} recordings` };
+  }
+
   // The menu is built once: every handler reads `mode`, `selected`,
   // `analysed` and `aois` when it fires, so it never goes stale.
   exportMenu.append(
@@ -918,25 +1057,37 @@ export async function renderResults(
               ? "All participants, low-signal excluded"
               : "All participants"
             : (keyed[0]?.recording.participant ?? "All participants"),
+        aois,
+        showAois,
       });
     }),
     exportItem("Fixations CSV", "export-fixations", () =>
       exportFixationsCsv(
         study,
-        analysed.map((a) => ({ participant: a.recording.participant, fixations: a.fixations }))
+        activeSet().map((a) => ({ recording: a.recording, data: a.fixations })),
+        exportScope()
       )
     ),
-    exportItem("Raw CSV", "export-raw", () => exportRawCsv(study, recordings)),
+    exportItem("Raw CSV", "export-raw", () =>
+      exportRawCsv(
+        study,
+        activeSet().map((a) => a.recording),
+        exportScope()
+      )
+    ),
     exportItem("AOI CSV", "export-aoi", () =>
       exportAoiCsv(
         study,
         aggregateAois(
           aois,
-          analysed.map((a) => a.aoiResults)
+          activeSet().map((a) => a.aoiResults)
         ),
-        analysed.map((a) => ({ participant: a.recording.participant, results: a.aoiResults }))
+        activeSet().map((a) => ({ recording: a.recording, data: a.aoiResults })),
+        exportScope()
       )
     ),
+    // The one export that is an archive rather than a view of the screen, so it
+    // stays whole: every recording, low-signal ones included and graded.
     exportItem("Session JSON", "export-json", () => exportStudyJson(study, recordings))
   );
 
@@ -968,10 +1119,15 @@ export async function renderResults(
   observer.observe(host, { childList: true });
 }
 
-function statRow(label: string, value: string, grade?: QualityGrade): HTMLElement {
+function statRow(
+  label: string,
+  value: string,
+  grade?: QualityGrade,
+  hint?: string
+): HTMLElement {
   return el(
     "div",
-    { class: "stat-row" },
+    { class: "stat-row", title: hint ?? null },
     el("span", {}, label),
     el("strong", { class: grade ? `signal-${grade}` : "" }, value)
   );
@@ -1009,37 +1165,34 @@ function renderRawPoints(canvas: HTMLCanvasElement, recordings: Recording[]): vo
   });
 }
 
-function renderAoiBoxes(layer: HTMLElement, aois: Aoi[], onChange: () => void): void {
+/**
+ * The region layer over the stimulus.
+ *
+ * Each box carries a permanent numbered badge and its name on hover. The name
+ * alone was hover-only, which left the primary annotation layer with no
+ * identity at all: five named regions rendered as five interchangeable hairline
+ * rectangles, and matching a table row to a box meant hovering each one in
+ * turn. The permanent chip that was removed for occluding the heat blob
+ * underneath is not the answer either — so the identity that is always on is a
+ * small numbered badge straddling the corner, outside the box, keyed to the
+ * ordinal in the Areas of interest table; the full name still arrives on hover.
+ */
+function renderAoiBoxes(layer: HTMLElement, aois: Aoi[]): void {
   for (const node of Array.from(layer.querySelectorAll(".aoi-box:not(.is-drawing)"))) {
     node.remove();
   }
 
-  for (const aoi of aois) {
+  aois.forEach((aoi, index) => {
     const box = el(
       "div",
       { class: "aoi-box", "data-aoi": aoi.id },
-      el("span", { class: "aoi-label" }, aoi.label),
-      el(
-        "button",
-        {
-          class: "aoi-remove",
-          type: "button",
-          title: "Remove region",
-          "aria-label": `Remove region ${aoi.label}`,
-          onclick: (event: Event) => {
-            event.stopPropagation();
-            const index = aois.findIndex((a) => a.id === aoi.id);
-            if (index >= 0) aois.splice(index, 1);
-            onChange();
-          },
-        },
-        "×"
-      )
+      el("span", { class: "aoi-ordinal", "aria-hidden": "true" }, String(index + 1)),
+      el("span", { class: "aoi-label" }, aoi.label)
     );
     box.style.left = `${aoi.x * 100}%`;
     box.style.top = `${aoi.y * 100}%`;
     box.style.width = `${aoi.width * 100}%`;
     box.style.height = `${aoi.height * 100}%`;
     layer.append(box);
-  }
+  });
 }

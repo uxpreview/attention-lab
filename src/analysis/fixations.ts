@@ -141,7 +141,18 @@ export interface ScanStats {
   totalDwell: number;
   /** Total distance travelled between consecutive fixations. */
   scanpathLength: number;
-  /** Time from recording start to the first fixation, in milliseconds. */
+  /**
+   * Time from `recordingStart` to the first fixation, in milliseconds.
+   *
+   * Only meaningful for a single recording's own fixations against that
+   * recording's own start. It is *not* a research "time to first fixation":
+   * capture begins with the participant already looking at the screen, so the
+   * first fixation lands within a frame or two of t=0 and this is near zero by
+   * construction. Over a concatenated list from several recordings it is
+   * meaningless outright — it describes whichever recording happened to be
+   * first. The results screen reports time to the first fixation inside a
+   * region instead, which is what the metric is normally taken to mean.
+   */
   timeToFirstFixation: number;
 }
 

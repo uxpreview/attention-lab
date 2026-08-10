@@ -1060,19 +1060,35 @@ async function runSession(study: Study): Promise<void> {
     sessionControls.hidden = !visible;
   };
 
-  const panel = el(
-    "section",
-    { class: "panel session-panel" },
+  /**
+   * The session screen, in two columns where there is room for two.
+   *
+   * This is the screen a participant sits in front of while framing their face,
+   * and it used to be a ~620px card about 330px tall floating in a 1440×900
+   * window with 450px of empty cream underneath it. The camera preview — the
+   * element that decides whether calibration will work at all — got a fraction
+   * of the available space, and the head-position oval inside it was
+   * correspondingly small. The preview and its framing guide now take a column
+   * of their own and everything the moderator reads or types takes the other.
+   * Below 1100px it stacks back into the single card it was.
+   */
+  const mediaColumn = el("div", { class: "session-media" }, preview, privacyNote);
+  const detailColumn = el(
+    "div",
+    { class: "session-detail" },
     el("h2", {}, study.name),
     el("p", { class: "muted" }, study.task || "No task set"),
     stimulusCheck(study),
-    preview,
-    privacyNote,
     status,
     sessionControls,
     outcomeLine,
     actions
   );
+  const panel = el("section", { class: "panel session-panel" }, mediaColumn, detailColumn);
+  /** Collapses to one column when there is no picture to give one to. */
+  const setMediaVisible = (visible: boolean): void => {
+    panel.classList.toggle("has-no-media", !visible);
+  };
 
   app.append(
     // The session screen replaces the page, so it carries the site bar with it
@@ -1080,10 +1096,11 @@ async function runSession(study: Study): Promise<void> {
     appBar(),
     el(
       "div",
-      // screen-narrow centres the whole column: the session panel is a single
-      // 620px card, and left-aligning it inside the site's 1840px shell reads
-      // as a mistake rather than a layout. Results keeps the wide shell.
-      { class: "container screen screen-narrow" },
+      // The session panel is its own measure — one card at small sizes, two
+      // columns once the preview has room to be worth looking at — and it is
+      // centred inside the site's 1840px shell rather than left-aligned in it.
+      // Results keeps the wide shell.
+      { class: "container screen screen-session" },
       el(
         "div",
         { class: "screen-head" },
@@ -1101,8 +1118,8 @@ async function runSession(study: Study): Promise<void> {
     // The rest of the session apparatus would only dress up a dead end. This
     // one is permanent — no retry can fix a stored address — so the camera
     // frame goes with it.
-    preview.remove();
-    privacyNote.remove();
+    mediaColumn.remove();
+    setMediaVisible(false);
     showSessionControls(false);
     return;
   }
@@ -1117,6 +1134,7 @@ async function runSession(study: Study): Promise<void> {
     clearOutcome();
     setStatus("Starting camera…");
     preview.classList.remove("is-dead");
+    setMediaVisible(true);
     showSessionControls(true);
 
     try {
@@ -1127,6 +1145,7 @@ async function runSession(study: Study): Promise<void> {
       // beats leaving a dead solid-teal rectangle on the screen; it comes back
       // if a retry succeeds, and so do the controls.
       preview.classList.add("is-dead");
+      setMediaVisible(false);
       showSessionControls(false);
       clear(actions);
       actions.append(

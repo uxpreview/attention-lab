@@ -1,10 +1,37 @@
-import type { AoiAggregate, AoiResult } from "../analysis/aoi";
+import type { Aoi, AoiAggregate, AoiResult } from "../analysis/aoi";
 import type { Fixation } from "../analysis/fixations";
 import { legendFor, OVERLAY_LABELS, type LegendSpec, type OverlayMode } from "../analysis/legend";
+import { isLowSignal } from "../analysis/quality";
 import { CANVAS_FONT_FAMILY } from "../analysis/scanpath";
 import type { Recording, Study } from "./types";
 
 /** Export helpers. Everything is generated client-side and downloaded directly. */
+
+/**
+ * Which recordings a file covers, and why.
+ *
+ * An exported CSV outlives the screen it came from, and the results screen goes
+ * to real trouble to exclude low-signal sessions — so a file generated from
+ * that screen has to carry the exclusion with it. Without this the same study
+ * reported 75% on screen and 60% in the file, and nothing in the file hinted
+ * that the two were counting different sets of people.
+ */
+export interface ExportScope {
+  /** One sentence, written into the file above the column header row. */
+  note: string;
+}
+
+/** A recording and what was measured from it, as the CSV writers want it. */
+export interface ExportRow<T> {
+  recording: Recording;
+  data: T;
+}
+
+/** The scope line plus a blank row, ahead of the real header. Spreadsheets
+ * read it as a two-cell first row; a human reads it as provenance. */
+function scopeRows(scope: ExportScope): Array<Array<string | number | null>> {
+  return [["scope_note", scope.note], []];
+}
 
 function download(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -30,13 +57,15 @@ function toCsv(rows: Array<Array<string | number | null>>): string {
   return rows.map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
-export function exportRawCsv(study: Study, recordings: Recording[]): void {
+export function exportRawCsv(study: Study, recordings: Recording[], scope: ExportScope): void {
   const rows: Array<Array<string | number | null>> = [
-    ["participant", "t_ms", "x_norm", "y_norm"],
+    ...scopeRows(scope),
+    ["participant", "low_signal", "t_ms", "x_norm", "y_norm"],
   ];
   for (const recording of recordings) {
+    const low = isLowSignal(recording.quality) ? "true" : "false";
     for (const p of recording.points) {
-      rows.push([recording.participant, Math.round(p.t), p.x.toFixed(5), p.y.toFixed(5)]);
+      rows.push([recording.participant, low, Math.round(p.t), p.x.toFixed(5), p.y.toFixed(5)]);
     }
   }
   download(new Blob([toCsv(rows)], { type: "text/csv" }), `${slug(study.name)}-raw-gaze.csv`);
@@ -44,15 +73,28 @@ export function exportRawCsv(study: Study, recordings: Recording[]): void {
 
 export function exportFixationsCsv(
   study: Study,
-  fixationsByParticipant: Array<{ participant: string; fixations: Fixation[] }>
+  fixationsByParticipant: Array<ExportRow<Fixation[]>>,
+  scope: ExportScope
 ): void {
   const rows: Array<Array<string | number | null>> = [
-    ["participant", "index", "start_ms", "duration_ms", "x_norm", "y_norm", "samples"],
+    ...scopeRows(scope),
+    [
+      "participant",
+      "low_signal",
+      "index",
+      "start_ms",
+      "duration_ms",
+      "x_norm",
+      "y_norm",
+      "samples",
+    ],
   ];
-  for (const { participant, fixations } of fixationsByParticipant) {
+  for (const { recording, data: fixations } of fixationsByParticipant) {
+    const low = isLowSignal(recording.quality) ? "true" : "false";
     fixations.forEach((f, i) => {
       rows.push([
-        participant,
+        recording.participant,
+        low,
         i + 1,
         Math.round(f.start),
         Math.round(f.duration),
@@ -71,16 +113,31 @@ export function exportFixationsCsv(
 export function exportAoiCsv(
   study: Study,
   aggregates: AoiAggregate[],
-  perParticipant: Array<{ participant: string; results: AoiResult[] }>
+  perParticipant: Array<ExportRow<AoiResult[]>>,
+  scope: ExportScope
 ): void {
   const rows: Array<Array<string | number | null>> = [
-    ["scope", "participant", "aoi", "hit_rate", "dwell_ms", "fixations", "ttff_ms", "dwell_share"],
+    ...scopeRows(scope),
+    [
+      "scope",
+      "participant",
+      "low_signal",
+      "aoi",
+      "hit_rate",
+      "dwell_ms",
+      "fixations",
+      "ttff_ms",
+      "dwell_share",
+    ],
   ];
 
   for (const a of aggregates) {
     rows.push([
       "study",
       `n=${a.participants}`,
+      // The aggregate row is a roll-up of whatever the scope line describes,
+      // so it is not itself one recording's grade.
+      "",
       a.label,
       a.hitRate.toFixed(3),
       Math.round(a.meanDwell),
@@ -90,11 +147,13 @@ export function exportAoiCsv(
     ]);
   }
 
-  for (const { participant, results } of perParticipant) {
+  for (const { recording, data: results } of perParticipant) {
+    const low = isLowSignal(recording.quality) ? "true" : "false";
     for (const r of results) {
       rows.push([
         "participant",
-        participant,
+        recording.participant,
+        low,
         r.label,
         r.fixationCount > 0 ? 1 : 0,
         Math.round(r.dwell),
@@ -117,6 +176,8 @@ const CAPTION_BG = "#fef6e9";
 const CAPTION_LINE = "#e5dac6";
 const CAPTION_STRONG = "#182528";
 const CAPTION_MUTED = "#5f6e73";
+/** --accent. Region ink, on the image rather than in the caption. */
+const CAPTION_ACCENT = "#003f48";
 
 export interface OverlayExportContext {
   mode: OverlayMode;
@@ -124,6 +185,17 @@ export interface OverlayExportContext {
   participants: string[];
   /** "All participants" or the one participant the stage is showing. */
   scope: string;
+  /**
+   * The study's regions, and whether the screen was showing them.
+   *
+   * The region layer on screen is DOM, so it never reached this canvas: a
+   * heatmap exported from a study with five named regions came out as a clean
+   * heat wash with no boxes and no names, which cannot support the one sentence
+   * it is pasted into a deck to support. Drawn here from the same normalised
+   * rects, gated on the screen's own "Show regions" switch.
+   */
+  aois: Aoi[];
+  showAois: boolean;
 }
 
 /**
@@ -165,6 +237,8 @@ export async function exportOverlayPng(
     ctx.fillRect(0, 0, width, height);
   }
   ctx.drawImage(overlay, 0, 0, width, height);
+
+  if (context.showAois) drawAois(ctx, context.aois, width, height, unit);
 
   drawCaption(ctx, study, context, {
     x: 0,
@@ -225,14 +299,22 @@ function drawCaption(
 
   y += unit * 1.6;
   const n = context.participants.length;
+  // The date gets its own line rather than the tail of a joined string. On a
+  // 1440px stimulus the uppercased meta line overflowed its column and the
+  // ellipsis ate exactly the provenance a research artifact needs — the export
+  // read "… ALL PARTICIPANTS, LOW-SIGNAL EXCLUDED · 20…". The band has the
+  // vertical room; the line did not have the horizontal room.
   const meta = [
     OVERLAY_LABELS[context.mode],
     `n=${n} participant${n === 1 ? "" : "s"}`,
     context.scope,
-    new Date().toISOString().slice(0, 10),
   ].join("  ·  ");
   ctx.font = `500 ${unit * 0.86}px ${CANVAS_FONT_FAMILY}`;
   ctx.fillText(ellipsise(ctx, meta.toUpperCase(), columnWidth), left, y);
+
+  y += unit * 1.25;
+  ctx.font = `400 ${unit * 0.8}px ${CANVAS_FONT_FAMILY}`;
+  ctx.fillText(`Exported ${new Date().toISOString().slice(0, 10)}`, left, y);
 
   // Right column: the same legend the results screen shows.
   drawLegend(ctx, spec, {
@@ -302,11 +384,115 @@ function drawLegend(
 
   ctx.fillStyle = CAPTION_MUTED;
   ctx.font = `400 ${unit * 0.78}px ${CANVAS_FONT_FAMILY}`;
-  for (const line of wrap(ctx, spec.note, box.width).slice(0, 3)) {
+  // A caption that stops mid-sentence ("…are left clear rather than") reads as
+  // a broken file rather than a trimmed one. Whatever the last drawn line is,
+  // it says so.
+  const lines = wrap(ctx, spec.note, box.width);
+  const shown = lines.slice(0, MAX_NOTE_LINES);
+  const truncated = lines.length > shown.length;
+  shown.forEach((line, i) => {
     if (y > box.y + box.height) return;
-    ctx.fillText(line, box.x, y);
+    const last = i === shown.length - 1;
+    ctx.fillText(truncated && last ? ellipsise(ctx, `${line}…`, box.width) : line, box.x, y);
     y += unit * 1.15;
-  }
+  });
+}
+
+/** How many lines of the legend note fit beside the scale. */
+const MAX_NOTE_LINES = 3;
+
+/**
+ * The region layer, stroked onto the exported image.
+ *
+ * Same recipe as `.aoi-box` on screen: a white outer halo under a 1.5px accent
+ * stroke, so the box survives a pale wireframe and a dark screenshot alike, and
+ * the same numbered badge that keys the Areas of interest table — a reader with
+ * the PNG and the CSV can match "3" in one to "3" in the other.
+ */
+function drawAois(
+  ctx: CanvasRenderingContext2D,
+  aois: Aoi[],
+  width: number,
+  height: number,
+  unit: number
+): void {
+  if (aois.length === 0) return;
+  const stroke = Math.max(1.5, unit * 0.13);
+  const font = Math.max(11, unit * 0.85);
+  const badge = font * 1.62;
+
+  ctx.save();
+  ctx.textBaseline = "middle";
+
+  aois.forEach((aoi, i) => {
+    const x = aoi.x * width;
+    const y = aoi.y * height;
+    const w = aoi.width * width;
+    const h = aoi.height * height;
+
+    ctx.lineWidth = stroke * 2.4;
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = stroke;
+    ctx.strokeStyle = CAPTION_ACCENT;
+    ctx.strokeRect(x, y, w, h);
+
+    // Name chip, above the box where there is room and inside its top edge
+    // where there is not.
+    ctx.font = `500 ${font}px ${CANVAS_FONT_FAMILY}`;
+    const chipHeight = font * 1.7;
+    const chipWidth = Math.min(width, ctx.measureText(aoi.label).width + font * 1.1);
+    const above = y - badge * 0.5 - chipHeight - font * 0.2;
+    const chipY = above >= 0 ? above : y + badge * 0.5 + font * 0.2;
+    // Pulled back onto the canvas for a region against the right edge, rather
+    // than run off it.
+    const chipX = Math.min(Math.max(0, x + badge * 0.7), Math.max(0, width - chipWidth));
+    ctx.fillStyle = CAPTION_ACCENT;
+    roundedRect(ctx, chipX, chipY, chipWidth, chipHeight, font * 0.3);
+    ctx.fill();
+    ctx.fillStyle = CAPTION_BG;
+    ctx.textAlign = "left";
+    ctx.fillText(aoi.label, chipX + font * 0.55, chipY + chipHeight / 2);
+
+    // Ordinal badge, straddling the top-left corner so it never covers the
+    // heat it is annotating.
+    const ordinal = String(i + 1);
+    ctx.font = `700 ${font * 0.86}px ${CANVAS_FONT_FAMILY}`;
+    const badgeWidth = Math.max(badge, ctx.measureText(ordinal).width + font * 0.8);
+    const bx = Math.max(0, x - badge * 0.5);
+    const by = Math.max(0, y - badge * 0.5);
+    ctx.fillStyle = CAPTION_BG;
+    roundedRect(ctx, bx - stroke, by - stroke, badgeWidth + stroke * 2, badge + stroke * 2, badge * 0.5);
+    ctx.fill();
+    ctx.fillStyle = CAPTION_ACCENT;
+    roundedRect(ctx, bx, by, badgeWidth, badge, badge * 0.5);
+    ctx.fill();
+    ctx.fillStyle = CAPTION_BG;
+    ctx.textAlign = "center";
+    ctx.fillText(ordinal, bx + badgeWidth / 2, by + badge / 2);
+  });
+
+  ctx.restore();
+}
+
+/** A rounded rectangle path. `roundRect` is not universal enough to lean on
+ * for the one artifact that leaves the tool. */
+function roundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+): void {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
 }
 
 /** Trims a single line to fit, with an ellipsis rather than an overflow. */

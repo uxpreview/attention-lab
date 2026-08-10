@@ -319,16 +319,28 @@ function waitForStop(
     const hint = el("div", { class: "record-hint" }, baseHint);
     // Who is being recorded, and how long is left. A moderator running
     // back-to-back sessions otherwise has no way to confirm they are capturing
-    // P04 and not P03, and a 6px sliver of peach in the corner of the screen is
-    // not a clock.
+    // P04 and not P03, and a progress sliver at the foot of the screen is not
+    // a clock.
     const clock = el("span", { class: "record-clock" }, durationMs > 0 ? formatClock(durationMs) : "0:00");
+    // Nothing on this screen read as "live". The only state cues were a 13px
+    // grey sentence and a peach clock: a moderator glancing across a desk
+    // could not tell a running capture from a paused one, and a participant
+    // had no cue that the camera was on — which matters most in the tool whose
+    // selling point is that the camera never leaves the machine. The dot is
+    // the universal one, in --signal-bad, beside the label it applies to.
     const who = el(
       "div",
       { class: "record-who" },
+      el("span", { class: "record-live", "aria-hidden": "true" }),
       el("span", { class: "record-participant" }, participant),
       clock
     );
-    const finishBtn = el("button", { class: "btn btn-small", type: "button" }, "Finish");
+    // The safe completion is the loudest control in the strip. Finish was an
+    // outline button while an armed Discard filled itself in --signal-bad, so
+    // at the exact moment a moderator is under time pressure and reaching for
+    // a button, the destructive one was the most prominent element on the
+    // screen. Primary here is peach on teal, per the band's token remap.
+    const finishBtn = el("button", { class: "btn btn-primary btn-small", type: "button" }, "Finish");
     // Two-step, and the same two-step every other destructive control in the
     // app uses: this is a participant's one first pass over the screen and a
     // single slip of Escape must not erase it. It used to be hand-rolled here

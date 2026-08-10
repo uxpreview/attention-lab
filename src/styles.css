@@ -84,11 +84,17 @@ label,
 .screen-head {
   margin-bottom: 20px;
 }
-/* The session screen is a single 620px card, so the whole column narrows to
-   the card's measure and centres. .container's own margin: auto does the
-   centring; the head then shares the panel's left edge. */
-.screen-narrow {
+/* The session screen's own measure. One 620px card at small sizes; wide enough
+   for a 640px camera preview beside a column of controls once there is room
+   for both. .container's own margin: auto does the centring; the head then
+   shares the panel's left edge. */
+.screen-session {
   max-width: calc(620px + 80px);
+}
+@media (min-width: 1100px) {
+  .screen-session {
+    max-width: 1240px;
+  }
 }
 /* The results screen used to leave ~180px of dead cream under the stage at
    1440×900. It now grows to the viewport, so the stage takes the slack.
@@ -959,8 +965,47 @@ p {
 
 /* --- Session ---------------------------------------------------------- */
 
+/* One column, then two.
+ *
+ * At 1440×900 this was a ~620px card about 330px tall with 450px of empty
+ * cream below it — and the element inside it that decides whether calibration
+ * will work at all, the camera preview a participant frames their face
+ * against, was getting a third of the width the screen had spare. The preview
+ * takes a real column at ≥1100px and the moderator's reading and typing takes
+ * the other; below that it stacks back into the card it was. */
 .session-panel {
   max-width: 620px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 32px;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  .session-panel {
+    max-width: none;
+    grid-template-columns: minmax(0, 640px) minmax(0, 1fr);
+  }
+  /* The preview column leads, so its first element sits on the same baseline
+     as the study name beside it rather than 30px below it. */
+  .session-media .camera-preview {
+    margin-top: 6px;
+  }
+  .session-detail > h2:first-child {
+    margin-top: 0;
+  }
+}
+/* A camera that never started, or a study whose address cannot be loaded: with
+   no picture to show there is no second column to give it. */
+.session-panel.has-no-media {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 620px;
+}
+.session-panel.has-no-media .session-media {
+  display: none;
+}
+.session-media,
+.session-detail {
+  min-width: 0;
 }
 
 /* The stimulus preflight: what the participant will actually be shown, seen
@@ -1289,31 +1334,66 @@ p {
   opacity: 0;
   pointer-events: none;
 }
+/* A ring around a centre point, not a filled disc.
+ *
+ * This used to be 20px of solid peach inside a 3px cream border with no centre
+ * at all. At the 60cm viewing distance pxToDegrees assumes, 20px subtends about
+ * 1.9° — wider than the 2° "good" threshold the tool grades its own calibration
+ * against, so a participant could fixate anywhere inside the target and still be
+ * most of a degree from the point the model is being fitted to. Every
+ * commercial calibration target is a ring around a small high-contrast centre
+ * for exactly this reason: the ring is what draws the eye across the screen, the
+ * centre is what it lands on. The app's own bench note says a stale calibration
+ * "looks exactly like data"; so does a loose one. */
 .calib-dot {
   position: absolute;
   width: 26px;
   height: 26px;
   margin: -13px 0 0 -13px;
   border-radius: 50%;
-  background: var(--accent);
-  border: 3px solid #fdf4e7;
+  background: transparent;
+  border: 3px solid var(--accent);
   padding: 0;
   cursor: pointer;
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+    0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
   animation: pulse 1.4s ease-in-out infinite;
 }
+/* The thing to look at: 4px, the highest contrast on the screen, dead centre. */
+.calib-dot::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: var(--strong);
+}
+/* Sampling: the ring contracts toward the centre rather than swapping its fill.
+   A target that changes colour asks the eye to re-acquire it; a target that
+   tightens onto the point it already has tells the participant to hold. */
 .calib-dot.is-active {
   animation: none;
-  background: var(--signal-good);
-  box-shadow: 0 0 0 10px color-mix(in srgb, var(--signal-good) 20%, transparent);
+  border-width: 6px;
+  border-color: var(--signal-good);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+    0 0 0 10px color-mix(in srgb, var(--signal-good) 20%, transparent);
 }
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+      0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 14px color-mix(in srgb, var(--accent) 6%, transparent);
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+      0 0 0 14px color-mix(in srgb, var(--accent) 6%, transparent);
   }
 }
 /* The dwell ring: a determinate sweep over settle + dwell, so "hold your gaze"
@@ -1386,7 +1466,7 @@ p {
 }
 /* The peach fill needs a guaranteed ground: on its own it is ~1.6:1 over the
    light page most stimuli are, which loses the one time-remaining signal. */
-/* The first 6px of the reserved band, so it underlines the stimulus rather
+/* The top of the reserved band, so it underlines the stimulus rather
    than lying across its top edge. It is not a control, but it is the one
    animating thing on the screen, and anything that pulls a participant's eye
    inside the measured rect turns their glance at the clock into a fixation on
@@ -1396,8 +1476,13 @@ p {
   top: calc(100% - var(--record-band, 96px));
   left: 0;
   right: 0;
-  height: 6px;
-  background: color-mix(in srgb, #003f48 85%, transparent);
+  /* 10px on a solid dark track. At 6px on a translucent one the fill read as a
+     rendering artifact — a 130px peach sliver hard against the bottom-left
+     corner of the stimulus — rather than as time remaining. The rule above the
+     fill separates it from the stimulus edge it underlines. */
+  height: 10px;
+  background: #002b32;
+  border-top: 1px solid color-mix(in srgb, #fdf4e7 22%, transparent);
 }
 .record-progress {
   height: 100%;
@@ -1430,22 +1515,41 @@ p {
 .record-controls .btn {
   background: color-mix(in srgb, #003f48 82%, transparent);
 }
+/* Finish is the one control in the strip that should be reached for, so it
+   keeps its filled peach rather than taking the backing above. */
+.record-controls .btn-primary,
+.record-controls .btn-primary:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.record-controls .btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
 /* The armed half of the discard.
-   Every control in this strip carries the same teal backing, so "Really
-   discard?" rendered as a pill essentially identical to Finish beside it: the
-   one click in the app that destroys a participant's only pass over the screen
-   was the least distinct confirm in the product. Filled, not outlined — it has
-   to be unmistakable from across a desk, in a dark room, in peripheral vision. */
+   Unmistakable, but not the loudest thing on the screen. Filled in
+   --signal-bad it outranked Finish beside it — a destructive confirm reading
+   as the primary action of the strip. Outlined in the same colour it is still
+   the only salmon element in a teal band and still nothing like the control
+   next to it, while the filled peach of Finish stays the thing the eye
+   reaches for. */
 .record-controls .btn.is-armed,
-.record-controls .btn.is-armed:hover,
+.record-controls .btn.is-armed:hover {
+  background: color-mix(in srgb, #003f48 82%, transparent);
+  border-color: var(--signal-bad);
+  color: var(--signal-bad);
+}
+/* The calibration cancel has no primary control beside it to outrank, and one
+   press there throws away a whole calibration sequence. It stays filled. */
 .calib-cancel.is-armed,
 .calib-cancel.is-armed:hover {
   background: var(--signal-bad);
   border-color: var(--signal-bad);
   color: #40140c;
 }
-/* Who is being recorded, and how long is left. The 6px progress sliver at the
-   top edge of the screen is a peripheral cue, not a readout: a moderator
+/* Who is being recorded, and how long is left. The progress bar under the
+   stimulus is a peripheral cue, not a readout: a moderator
    running back-to-back sessions needs to confirm the label and see the clock
    without leaving the participant's screen. */
 .record-who {
@@ -1456,6 +1560,30 @@ p {
   border-radius: var(--r-chip);
   padding: 6px 14px;
   white-space: nowrap;
+}
+/* The live indicator. Nothing on this screen read as "live": the only cues
+   were a 13px grey sentence and a peach clock, so a moderator glancing across
+   a desk could not tell a running capture from a paused one, and a participant
+   had no sign the camera was on. Red, round and pulsing is the one convention
+   both of them already read without being told. Reduced motion neutralises the
+   pulse globally; the colour and the position carry it on their own. */
+.record-live {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--signal-bad);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal-bad) 55%, transparent);
+  animation: record-live-pulse 1.6s ease-out infinite;
+}
+@keyframes record-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal-bad) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--signal-bad) 0%, transparent);
+  }
 }
 /* Read from across a desk mid-session, which is the worst possible place for
    tracked 11px uppercase. It is also a participant label someone typed — "p04"
@@ -1918,7 +2046,50 @@ p {
 }
 /* The region name is the column a reader scans; the three measures are short. */
 .data-table .cell-name {
-  width: 44%;
+  width: 40%;
+}
+/* The ordinal column is the join between this table and the stage: the chip
+   here and the badge on the box are the same number in the same ink. */
+.data-table .col-ordinal,
+.data-table .cell-ordinal {
+  width: 30px;
+  padding-right: 0;
+}
+.data-table .col-action {
+  width: 1%;
+}
+.data-table .cell-action {
+  text-align: right;
+  white-space: nowrap;
+}
+.ordinal-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-chip);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+/* Present to a screen reader, absent to the eye: a column of numbers and a
+   column of Remove buttons both need a header name, and neither needs it
+   printed. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 /* An acronym in a header cell has to be able to say what it stands for. */
 abbr[title] {
@@ -2055,11 +2226,21 @@ abbr[title] {
   touch-action: none;
 }
 /* Region ink is token-driven, so the overlay can be flipped wholesale when the
-   stage goes dark — see .stage--spotlight below. */
+   stage goes dark — see .stage--spotlight below.
+ *
+ * No resting fill. Every box used to carry a 10% accent wash, and the region layer sits above
+ * the overlay canvas — so in the heat view the clusters inside a region
+ * rendered visibly cooler and greyer than an identically dense cluster that
+ * happened to have no box over it. In a tool whose entire claim is that colour
+ * encodes fixation duration, the annotation layer was altering the reading of
+ * the measurement, and only where someone had drawn a box: exactly where they
+ * intend to read numbers. The double stroke carries the box on its own; the
+ * 26% wash survives on .is-linked, where it is a deliberate momentary
+ * highlight rather than a permanent tint. */
 .aoi-box {
   position: absolute;
   border: 1.5px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  background: transparent;
   border-radius: 3px;
   pointer-events: auto;
   /* Double stroke — the annotation-tool trick — so the box still reads when
@@ -2068,6 +2249,35 @@ abbr[title] {
   transition:
     background-color 0.15s ease,
     box-shadow 0.15s ease;
+}
+/* The identity that is always on.
+ *
+ * Named regions rendered as identical unlabelled rectangles because the name
+ * chip was hover-only, and hover-only identity means matching a table row to a
+ * box requires hovering each box in turn. A permanent full name is not the fix
+ * either — that is what used to sit on top of the heat blob it was naming — so
+ * what is burned on is the ordinal, outside the border, on the corner, keyed to
+ * the same number in the Areas of interest table. */
+.aoi-ordinal {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-chip);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: 0 0 0 1.5px var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .aoi-box.is-drawing {
   border-style: dashed;
@@ -2091,8 +2301,9 @@ abbr[title] {
    case it was written in rather than shouted. */
 .aoi-label {
   position: absolute;
-  top: -21px;
-  left: -1px;
+  top: -23px;
+  /* Clear of the ordinal badge on the same corner. */
+  left: 13px;
   background: var(--accent);
   color: var(--accent-contrast);
   font-family: var(--font-mono);
@@ -2112,37 +2323,25 @@ abbr[title] {
 .aoi-layer.is-drawing .aoi-label {
   opacity: 1;
 }
-.aoi-remove {
-  position: absolute;
-  top: -9px;
-  right: -9px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 0;
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-.aoi-box:hover .aoi-remove,
-.aoi-remove:focus-visible {
-  opacity: 1;
-}
-.aoi-remove:hover {
-  background: var(--accent-warm-ink);
-}
+/* There is deliberately no delete control on the box. It used to be a
+   vermillion × that faded in under passive hover and fired on one click with
+   no confirm — on a stimulus that is most of the screen, a mouse merely
+   crossing the stage armed it. Removal lives in the Areas of interest table
+   now, as a labelled two-step control like every other destructive action in
+   the app. */
 
 /* Spotlight dims the stage to a near-black mask, and a deep-teal box with a
    dark label chip disappears into it — the two regions in the screenshot were
    barely findable. Under the mask the region ink inverts to cream. */
 .stage--spotlight .aoi-box {
   border-color: var(--bg);
-  background: color-mix(in srgb, var(--bg) 12%, transparent);
+  background: transparent;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.stage--spotlight .aoi-ordinal {
+  background: var(--bg);
+  color: var(--accent);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
 }
 .stage--spotlight .aoi-box.is-linked {
   background: color-mix(in srgb, var(--bg) 28%, transparent);
@@ -2150,8 +2349,7 @@ abbr[title] {
     0 0 0 1px rgba(0, 0, 0, 0.55),
     0 0 0 4px color-mix(in srgb, var(--bg) 40%, transparent);
 }
-.stage--spotlight .aoi-label,
-.stage--spotlight .aoi-remove {
+.stage--spotlight .aoi-label {
   background: var(--bg);
   color: var(--accent);
 }
@@ -2209,9 +2407,20 @@ abbr[title] {
   .study-card {
     grid-template-columns: 1fr;
   }
+  /* Full width, but not a centre-crop. At 96×68 `cover` is a legible
+     whole-page mini; stretched to ~700×120 it became a horizontal slice
+     through the middle of a wireframe — a fragment of the payment fields with
+     no context, which destroys the one piece of recognition a study list
+     needs. Contained and top-anchored, the thumbnail shows the top of the
+     screen the way a browser tab preview does. */
   .study-thumb {
     width: 100%;
     height: 120px;
+  }
+  .study-thumb img {
+    object-fit: contain;
+    object-position: center top;
+    background: var(--tint);
   }
 }
 
@@ -2219,14 +2428,21 @@ abbr[title] {
   /* Controls go full width and gain height: a 12px tracked label in a pill is
      a small target, and at this width there is no reason to keep them inline
      beside each other. */
+  /* Two even columns and nothing spanning them. `.btn-ghost` used to take a
+     full-width row of its own, and both Edit and Delete are ghost buttons — so
+     the card ended in Run session + Results side by side, then a centred
+     full-width Edit, then a centred full-width Delete: two stacked orphan rows
+     that read as a layout failure rather than a hierarchy. A 2×2 grid pairs
+     them, and keeps the destructive control from being the widest thing on the
+     card. */
   .study-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 8px;
     width: 100%;
   }
-  .study-actions .btn-ghost {
-    grid-column: 1 / -1;
+  .study-actions .btn {
+    width: 100%;
   }
   .btn {
     padding: 15px 20px;
@@ -2264,6 +2480,78 @@ abbr[title] {
   }
   .note-row {
     padding: 16px 0;
+  }
+}
+
+/* --- Print ------------------------------------------------------------ */
+/* Printing or PDF-ing a populated results screen is the most obvious route
+   from this tool into a research write-up, and it used to carry the site bar,
+   the cream ground, the Export menu and — from the study list — the whole set
+   of bench notes. What a printed page owes a reader is the stage, the legend
+   that decodes it, and the tables; everything that only works on a screen goes.
+   Ink is not free either: the warm ground is dropped for white. */
+@media print {
+  body {
+    background: #fff;
+  }
+  .site-bar,
+  .app-header,
+  .app-footer,
+  .results-actions,
+  .stage-empty,
+  .placeholder-actions,
+  .segmented,
+  .checkbox,
+  .cell-action,
+  .col-action {
+    display: none !important;
+  }
+  .screen,
+  .screen-fill {
+    padding: 0;
+    min-height: 0;
+  }
+  /* One column at page width: a 320px rail beside a stage is a screen layout,
+     and on paper it only narrows the figure. */
+  .results-layout,
+  .results-data {
+    display: block;
+  }
+  .results-sidebar,
+  .results-block,
+  .legend-slot {
+    position: static;
+    margin-top: 14px;
+  }
+  /* A figure split across a page break, or a legend on the page after the
+     overlay it decodes, is worse than a shorter page. */
+  .results-stage,
+  .results-block,
+  .legend,
+  .data-table tr {
+    break-inside: avoid;
+  }
+  .results-stage {
+    width: 100%;
+    min-height: 0;
+    border-color: #ccc;
+  }
+  .results-image {
+    max-height: none;
+    width: 100%;
+  }
+  .results-block,
+  .legend {
+    background: transparent;
+    border-color: #ccc;
+  }
+  /* Overlays and region boxes are the content, not decoration: browsers drop
+     backgrounds by default and a heatmap without its colours is a blank
+     wireframe. */
+  .results-overlay,
+  .aoi-layer {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 
