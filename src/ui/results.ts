@@ -332,15 +332,28 @@ export async function renderResults(
     },
     "Fit width"
   );
+  /**
+   * A toggle labelled by its state, not by its destination.
+   *
+   * The label used to swap to "Fit height" the moment fit-width came on, while
+   * `aria-pressed` — correctly — went to "true". So the visible word and the
+   * announced state were inverses: the screen read "Fit height" over a stimulus
+   * that was width-fitted and scrolling, and a first-time operator reads that as
+   * a statement about the stage rather than an offer. The text is now constant
+   * and the on/off rides on `.is-active` and `aria-pressed`, which is how
+   * `+ Draw` and `With recordings` already work on this screen — and it makes
+   * the announced state and the printed one the same claim.
+   */
   const setFit = (next: boolean): void => {
     fitWidth = next;
     figure.classList.toggle("is-fit-width", next);
     stage.classList.toggle("is-scrolling", next);
-    fitButton.textContent = next ? "Fit height" : "Fit width";
+    fitButton.classList.toggle("is-active", next);
     fitButton.title = next
-      ? "Fit the whole stimulus in the stage"
+      ? "Showing the stimulus at the stage's full width. Turn off to fit the whole stimulus in the stage."
       : "Show the stimulus at the stage's full width and scroll it";
     fitButton.setAttribute("aria-pressed", next ? "true" : "false");
+    markStageClip();
     void draw();
   };
   fitButton.addEventListener("click", () => {
@@ -436,13 +449,96 @@ export async function renderResults(
   // for another 437px beside a column of empty cream, and every recording added
   // made the gap taller. Spanning, the tables get the full measure and the rail
   // only has to be as tall as the thing it governs.
-  const layout = el(
-    "div",
-    { class: "results-layout" },
-    el("div", { class: "results-main" }, stageBar, stage, emptyStrip, legend),
-    rail,
-    dataBlock
-  );
+  const mainColumn = el("div", { class: "results-main" }, stageBar, stage, emptyStrip, legend);
+  const layout = el("div", { class: "results-layout" }, mainColumn, rail, dataBlock);
+
+  /**
+   * The stage's ceiling, measured off the page instead of asserted about it.
+   *
+   * `--stage-cap` used to be `100vh - 450px` — a constant standing in for "the
+   * chrome above the stage, the legend below it, and the head of the region
+   * table". The chrome does not cost 450px, and the difference came out of the
+   * stimulus: at 1440×900 the cap held the stage to 450px while the figure was
+   * 631, so a third of the wireframe was inside a scroller with no scrollbar,
+   * and the region table the reserve was bought for still opened below the fold.
+   *
+   * Two numbers replace the constant, both read from the live layout:
+   *
+   *   viewport − (top of the stage) − (everything under it in the column)
+   *
+   * is the height at which the stage and the legend that decodes it end exactly
+   * at the fold, and
+   *
+   *   rail height − (stage bar) − (everything under the stage in the column)
+   *
+   * is the height at which the stage fills its grid row. The larger wins: the
+   * first is the promise about the first screen, the second stops the row's
+   * slack being stranded as cream beside a rail that is taller than the column.
+   *
+   * Nothing here depends on the stage's own height, so this settles in one pass
+   * rather than converging: the stage's distance from the top of the document is
+   * set by the bar above it, and the chrome below it is the legend, whose width
+   * is the column's and not the stage's.
+   */
+  const chromeUnderStage = (): number =>
+    [emptyStrip, legend].reduce((total, node) => {
+      if (!node || !node.isConnected) return total;
+      const box = node.getBoundingClientRect();
+      if (box.height === 0) return total;
+      return total + box.height + (parseFloat(getComputedStyle(node).marginTop) || 0);
+    }, 0);
+
+  let appliedCap = 0;
+  const fitStageCap = (): void => {
+    if (!stage.isConnected) return;
+    const stageBox = stage.getBoundingClientRect();
+    const under = chromeUnderStage();
+    // Document-space, so a page scrolled down does not report a shorter reserve
+    // than the one the operator actually landed on.
+    const above = stageBox.top + window.scrollY;
+    let cap = window.innerHeight - above - under;
+
+    // Only where the column is a column. Below 1180px `.results-main` is
+    // `display: contents` and the rail is stacked under the stage rather than
+    // beside it, so there is no row to share and no slack to reclaim.
+    //
+    // The sidebar, not the rail that wraps it: the wrapper is stretched to the
+    // grid row so the sticky sidebar inside it has a runway, which means its
+    // height is the row's height, which is partly the stage's — measuring it
+    // would be measuring this function's own output and the cap would climb on
+    // every pass. The sidebar's height is its content and nothing else.
+    if (mainColumn.getClientRects().length > 0) {
+      const barAboveStage = stageBox.top - layout.getBoundingClientRect().top;
+      const fillsRow = sidebar.getBoundingClientRect().height - barAboveStage - under;
+      // Bounded by the bottom of the first screen. The rail's height is nearly a
+      // constant — its tallest state measures about 780px — so on a short window
+      // this term alone would keep asking for a 614px stage inside a 650px
+      // viewport: an artboard taller than the screen showing it, which is worse
+      // than the cream it was reclaiming. Growing into the row's slack is only
+      // ever worth it while the stage still fits on the screen.
+      cap = Math.max(cap, Math.min(fillsRow, window.innerHeight - above));
+    }
+
+    // The floor is the stage's own min-height; below it the declaration in the
+    // stylesheet governs and this would only be writing a number CSS ignores.
+    const next = Math.max(320, Math.round(cap));
+    if (next === appliedCap) return;
+    appliedCap = next;
+    layout.style.setProperty("--stage-cap", `${next}px`);
+  };
+
+  /**
+   * Whether the artboard is holding anything back, which is what the fade on its
+   * bottom edge is drawn from (see `.results-stage.is-clipped` in styles.css).
+   * Cleared on arrival at the end so the cue never marks an edge that is not one.
+   */
+  const markStageClip = (): void => {
+    const clipped =
+      stage.classList.contains("is-scrolling") &&
+      scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 1;
+    stage.classList.toggle("is-clipped", clipped);
+  };
+  scroller.addEventListener("scroll", markStageClip, { passive: true });
 
   // Export is the whole point of a research tool, so it is a persistent
   // toolbar action rather than the last block of a sidebar — where it sat below
@@ -1710,18 +1806,42 @@ export async function renderResults(
 
   renderSidebar();
   renderData();
+  // Before the first draw and before the fit is chosen: both read the stage's
+  // size, and the cap is what sets it.
+  fitStageCap();
   await draw();
   autoFit();
+  markStageClip();
 
   // Live resizes fire many events per second, and each full redraw re-splats
   // the entire heatmap. A trailing-edge debounce redraws once when the drag
-  // settles; in the interim the CSS-sized canvas simply stretches.
+  // settles; in the interim the CSS-sized canvas simply stretches. The cap is
+  // re-measured on every event rather than on the trailing edge — it is two
+  // getBoundingClientRects and one custom property, and deferring it would let
+  // the stage lag the window by 150ms of every drag.
   let resizeTimer = 0;
   const onResize = () => {
+    fitStageCap();
+    markStageClip();
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => void draw(), 150);
   };
   window.addEventListener("resize", onResize);
+
+  /* The legend is the one piece of the measured chrome that changes height
+     without the window changing size: switching to Raw gaze swaps a gradient
+     strip for a participant key, and selecting one participant swaps it back.
+     Watching it keeps the cap honest across view changes without every render
+     path having to remember to re-measure. The stage's own height is not
+     watched, so this cannot drive itself. */
+  const legendWatcher =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          fitStageCap();
+          markStageClip();
+        })
+      : null;
+  legendWatcher?.observe(legend);
 
   // The caller replaces the host contents on navigation; clean up after it.
   const observer = new MutationObserver(() => {
@@ -1730,6 +1850,7 @@ export async function renderResults(
       document.removeEventListener("pointerdown", onDocumentPointer);
       document.removeEventListener("keydown", onDocumentKey);
       window.clearTimeout(resizeTimer);
+      legendWatcher?.disconnect();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       observer.disconnect();
     }
@@ -1796,7 +1917,7 @@ function renderRawPoints(
   // and a stacking density field is only a density field under source-over.
   ctx.globalCompositeOperation = "source-over";
 
-  const radius = Math.max(3, 4 * scale);
+  const radius = Math.max(4, 6 * scale);
   recordings.forEach((recording, index) => {
     const sprite = dotSprite(index, radius);
     if (!sprite) return;
@@ -1826,8 +1947,16 @@ function dotSprite(participantIndex: number, radius: number): HTMLCanvasElement 
   const ctx = sprite.getContext("2d");
   if (!ctx) return null;
   const gradient = ctx.createRadialGradient(radius, radius, 0, radius, radius, radius);
-  gradient.addColorStop(0, participantColour(participantIndex, 0.14));
-  gradient.addColorStop(0.4, participantColour(participantIndex, 0.1));
+  // 0.30 / 0.20, not 0.14 / 0.10. The lower pair was tuned against the risk of
+  // a cluster saturating into a slab and overshot it: on the cream ground, over
+  // a light-grey wireframe, a single sample was invisible and a whole session's
+  // scatter came out fainter than the legend swatch keying it — the legend was
+  // louder than the data. This is the one view whose stated job is showing the
+  // tracker's raw honesty, so a sample it cannot show is a claim it cannot make.
+  // A lone mark now reads; the rim still falls to nothing, so a cluster is still
+  // a cloud with a soft edge rather than a tile.
+  gradient.addColorStop(0, participantColour(participantIndex, 0.3));
+  gradient.addColorStop(0.4, participantColour(participantIndex, 0.2));
   gradient.addColorStop(1, participantColour(participantIndex, 0));
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);

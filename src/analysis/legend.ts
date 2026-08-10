@@ -33,14 +33,29 @@ export const OVERLAY_LABELS: Record<OverlayMode, string> = {
  * you cannot tell whose is whose. This is the Okabe-Ito qualitative palette,
  * designed to stay distinguishable under all common forms of colour vision
  * deficiency.
+ *
+ * Ordered so the first two are the ones already in the app's own voice. The
+ * palette used to open on blue and orange, which share nothing with a screen
+ * built out of deep teal and vermillion — and most studies run two or three
+ * participants, so those first entries are the ones a reader actually sees. The
+ * bluish green and the vermillion below are the members of this set nearest the
+ * brand pair, and moving them to the front costs nothing: Okabe-Ito is
+ * specified as a set in which *every* pair separates under every common form of
+ * colour vision deficiency, so the order carries no part of that guarantee.
+ *
+ * What is deliberately not done here is swapping these for four colours mixed
+ * from the brand pair itself. Two hues cannot yield eight categorical values
+ * that stay separable — and a participant palette that repeats or collapses is
+ * a raw-gaze view that cannot answer the only question it is asked, which is
+ * whose cloud is whose.
  */
 export const PARTICIPANT_COLOURS = [
+  "#009e73", // bluish green — nearest the brand teal
+  "#d55e00", // vermillion
   "#0072b2", // blue
   "#e69f00", // orange
-  "#009e73", // bluish green
   "#cc79a7", // reddish purple
   "#56b4e9", // sky blue
-  "#d55e00", // vermillion
   "#8a5fbf", // violet
   "#332288", // indigo
 ];

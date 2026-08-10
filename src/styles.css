@@ -132,12 +132,29 @@ label,
  * camera permission lands on, so it is high-traffic, not an edge case. The card
  * keeps its 620px measure — the copy in it is prose and wants one — and takes
  * the middle of the field instead of the corner. 88px is the site bar plus the
- * screen's own top padding, matching .screen-fill. */
+ * screen's own top padding, matching .screen-fill.
+ *
+ * Both axes, which is what this rule claimed and only half did: in a column
+ * flex container `justify-content` is the *vertical* axis, and with no
+ * `align-items` the card kept the cross-axis default and stretched-then-capped
+ * to the left edge. Measured at 1440×900 it sat at x=140 with its centre on 450
+ * against a viewport centre of 720 — 680px of cream to its right, on the screen
+ * a first-time visitor with a blocked camera permission lands on. It read as a
+ * rendering failure on the screen least able to afford looking like one. */
 .screen-session:has(.has-no-media) {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  align-items: center;
   min-height: calc(100vh - 88px);
+}
+/* The card centres; the trail back does not. Centring the flex line took the
+   "← Studies" link with it and parked it over the middle of the field, where it
+   is the one control on this screen and reads as a caption to the card rather
+   than as the way out of it. It sits at the shell's left edge on every other
+   screen in the app, so it keeps its edge here. */
+.screen-session:has(.has-no-media) .screen-head {
+  align-self: stretch;
 }
 /* The results screen used to leave ~180px of dead cream under the stage at
    1440×900. It now grows to the viewport, so the stage takes the slack.
@@ -919,20 +936,27 @@ p {
  *
  * The auto margin is gone rather than restored: an auto margin that has to
  * resolve positive to avoid a collision is a layout that fails silently the
- * moment the copy grows. The slack is taken by the element above instead — the
- * lede grows into whatever spare height the stretched column has (flex-grow: 1)
- * and can never shrink below its own content (flex-shrink: 0, auto basis), so
- * the note still sits at the foot when there is room, and the 24px above it is
- * 24px in every case. */
+ * moment the copy grows.
+ *
+ * Nor does anything above it stretch any more. The slack used to be handed to
+ * the lede — `flex: 1 0 auto` on .panel-lede above 1000px — which did not
+ * remove the imbalance so much as move it into the middle of the copy: measured
+ * at 1440×900 an ~78px paragraph was drawn in a 252px box, 174px of cream
+ * between the lede and this note, on the first screen anyone sees. A column
+ * closes because it has enough to say (see the accuracy claim added alongside
+ * the lede in newStudyForm), not because one of its paragraphs was inflated. So
+ * every block here is its own height and the 24px above this one is 24px in
+ * every case. */
 .setup-copy > .setup-privacy {
   margin: 24px 0 0;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
-@media (min-width: 1000px) {
-  .setup-copy > .panel-lede {
-    flex: 1 0 auto;
-  }
+/* The second paragraph of the column, not a second lede: same voice, a step
+   down in size, so the claim in display type still leads the reading. */
+.setup-copy > .setup-accuracy {
+  font-size: 15px;
+  margin: 18px 0 0;
 }
 
 /* The collapsed create affordance: the list's own heading, with the way to add
@@ -1211,14 +1235,22 @@ p {
 .study-signal {
   grid-column: 3;
   display: grid;
-  gap: 6px;
-  justify-items: start;
-  align-content: center;
+  /* The label on its own row, then the bars and the mean side by side on the
+     second — the number reads as the summary of the picture beside it rather
+     than as a third thing stacked under it. */
+  grid-template-columns: auto auto;
+  justify-content: start;
+  align-items: end;
+  column-gap: 12px;
+  row-gap: 6px;
   min-width: 0;
   /* Bars are a fixed width each, so a squeezed track has to clip them rather
      than let them run under the buttons. The breakpoint below is what actually
      prevents the squeeze; this is the guard rail behind it. */
   overflow: hidden;
+}
+.study-signal > .label {
+  grid-column: 1 / -1;
 }
 .signal-none {
   font-size: 12px;
@@ -1231,14 +1263,42 @@ p {
 }
 /* One track per recording, filled to its tracking ratio. The track is drawn as
    well as the fill, so a 40% bar reads as 40% of something rather than as a
-   short mark of unknown scale. */
+   short mark of unknown scale.
+   10px rather than 6: at 6 the whole group measured 42px inside a 190px column,
+   which is a sparkline pretending to be a chart. */
 .signal-bar {
+  position: relative;
   display: flex;
   align-items: flex-end;
-  width: 6px;
+  width: 10px;
   height: 26px;
   border-radius: 2px;
   background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+/* The line a recording has to clear, drawn rather than tooltipped.
+ *
+ * A 44% bar and a 91% bar differed only in fill height with nothing to measure
+ * either against, so the grade the colour was already carrying could not be read
+ * off the geometry at all. This is TRACKING_BAD from analysis/quality.ts — the
+ * threshold below which a recording is dropped from the aggregate — at 60% of
+ * each track's height. Per track rather than one rule across the group: it stops
+ * short of the "+N" overflow label, and at a 3px gap the marks still read as one
+ * broken line across the row. */
+.signal-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 60%;
+  height: 1px;
+  /* Neutral ink, not --signal-warn. A warn-coloured rule is invisible on
+     precisely the bars that need it: a warn recording is one between 60% and
+     80%, so the line falls inside its own amber fill and disappears into it.
+     A scale mark is not a grade — it has to read over all three fills and over
+     the empty track, which is what a dark neutral at low opacity does. */
+  background: color-mix(in srgb, var(--strong) 45%, transparent);
+  /* Over the fill: a threshold under the thing it grades is not a threshold. */
+  z-index: 1;
 }
 /* The three grades the results screen paints, so a study that reads amber in
    the list reads amber when it is opened. */
@@ -1255,6 +1315,17 @@ p {
   color: var(--body-2);
   align-self: center;
 }
+/* The mean, in the grade's own ink — the same three colours the bars and the
+   results screen use, so a study reading amber here reads amber when opened. */
+.signal-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  /* Sat on the bars' baseline rather than their tops. */
+  padding-bottom: 2px;
+}
 /* The last track, explicitly. */
 .study-actions {
   grid-column: 4;
@@ -1263,11 +1334,19 @@ p {
   align-items: center;
 }
 
+/* The filter miss, and only the filter miss — see showStudyList for why the
+   true zero state no longer draws one of these. */
 .empty {
   text-align: center;
   padding: 52px 20px;
   border: 1px dashed var(--edge);
   border-radius: var(--r-card);
+}
+/* The handheld zero state: a sentence, not a container. */
+.list-zero {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
 }
 /* A first visit's primary message should not wear the smallest, faintest
    voice on the page: the empty-state heading rejoins the display register. */
@@ -1743,12 +1822,22 @@ p {
  * commercial calibration target is a ring around a small high-contrast centre
  * for exactly this reason: the ring is what draws the eye across the screen, the
  * centre is what it lands on. The app's own bench note says a stale calibration
- * "looks exactly like data"; so does a loose one. */
+ * "looks exactly like data"; so does a loose one.
+ *
+ * 44px, not 26. The two jobs pull opposite ways and 26 was solving only one of
+ * them: the *fixation* target has to be small, and it is — the centre below is
+ * 4px, about 0.38° at the 60cm viewing distance pxToDegrees assumes, well inside
+ * the 2° the tool grades itself against. The *pointer* target has no such
+ * constraint and every reason to be large: this flow asks for 18 clicks, its
+ * corner points sit at 6% and 94% of each axis where overshoot is likeliest, and
+ * 26px was under the 44px minimum for a control anyone is expected to hit
+ * reliably. Widening the ring costs the accuracy argument nothing, because what
+ * the eye lands on is the centre and the centre has not moved or grown. */
 .calib-dot {
   position: absolute;
-  width: 26px;
-  height: 26px;
-  margin: -13px 0 0 -13px;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
   border-radius: 50%;
   background: transparent;
   border: 3px solid var(--accent);
@@ -1830,13 +1919,20 @@ p {
    has a visible end. It is only up while sampling, and its stroke offset is
    driven from JS (see ui/calibration.ts) rather than a CSS animation, because
    reduced motion neutralises those and this one is a progress readout. */
+/* Outside the target, never over it. The sweep's diameter is 21/24 of this box,
+   so the box has to clear the dot's own 44px ring plus the 10px halo the active
+   state throws — at the old 62px the sweep came out at 54px and would now be
+   drawn *inside* the target it is meant to encircle. 84px puts the sweep at
+   ~74px with a ~5px stroke, which is the point of the size: this ring is the one
+   cue telling the participant when they may stop holding their gaze, and it is
+   read in peripheral vision while the eye is pinned to the centre. */
 .calib-ring {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 62px;
-  height: 62px;
-  margin: -31px 0 0 -31px;
+  width: 84px;
+  height: 84px;
+  margin: -42px 0 0 -42px;
   overflow: visible;
   opacity: 0;
   pointer-events: none;
@@ -2285,26 +2381,42 @@ p {
   max-width: none;
 }
 /**
- * How tall the stage may be, and why it is not simply 78vh.
+ * How tall the stage may be — measured, not guessed.
  *
- * At a flat 78vh the picture ate the first screen: measured at 1440×900 the
- * document was 1528px tall, the legend started at y=897 — one pixel above the
- * fold — the Areas-of-interest table at y=1114, and the sidebar's quality note
- * was cut mid-sentence. So the most important screen in the app opened on a
- * picture and no measurements, with nothing signalling that the study's actual
- * findings existed 214px further down.
+ * This was `min(78vh, max(320px, 100vh - 450px))`, a reserve picked to leave
+ * room for the chrome above the stage, the legend under it, and the head of the
+ * region table. The chrome does not cost 450px. Measured on the populated
+ * screen at 1440×900 it costs 349: 69 site bar + 32 screen padding + 54 header
+ * + 24 gap + 42 stage bar above, and 14 + 114 legend below. The 101px of
+ * over-reserve came straight off the stimulus — 211px of a 631px figure, 33% of
+ * it, scrolled out of view inside a scroller with no scrollbar — and the space
+ * it freed was not used by anything: the region table sat at y=1007, still
+ * below the 900px fold the reserve was bought to clear, while 164px of cream
+ * sat between the legend and the foot of the rail beside it.
  *
- * The cap is expressed as what has to fit *under* the stage instead: the chrome
- * above it, the legend that decodes it, and the head of the region table. That
- * stack measures about 450px, so at 900px the stage takes 450 and the Areas of
- * interest card — heading, column heads and first row — arrives above the fold
- * instead of 214px below it. On a tall monitor the 78vh ceiling still governs,
- * so nothing shrank for the screens that never had the problem, and the floor
- * matches the stage's own min-height rather than trading one failure for
- * another.
+ * So the reserve is now taken from the page rather than asserted about it.
+ * `fitStageCap()` in ui/results.ts measures the stage's own distance from the
+ * top of the document and the height of everything below it in the column, and
+ * writes the remainder here as a pixel value; it re-measures on resize and
+ * whenever the legend changes height, which is the one piece of that chrome
+ * that moves. Two consequences follow:
+ *
+ *   - the stage takes exactly the height that leaves the legend on the first
+ *     screen, which is what the 450px was trying and failing to buy, and
+ *   - where the rail is the taller grid item the cap opens up to the rail's
+ *     height instead, so the slack in the row goes into the stimulus rather
+ *     than being stranded as cream under it.
+ *
+ * The declaration below is the first-paint fallback and the print/no-JS value,
+ * not the working number: 350px is the measured reserve rounded up, so a frame
+ * rendered before the measurement lands is within a pixel of the right size.
+ * The floor matches the stage's own min-height.
  */
 .results-layout {
-  --stage-cap: min(78vh, max(320px, 100vh - 450px));
+  --stage-cap: max(320px, calc(100vh - 350px));
+  /* The gutter between the artboard's edge and the stimulus, named because the
+     contained figure's own ceiling has to subtract it — see .results-figure. */
+  --stage-pad: 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 24px;
@@ -2359,6 +2471,14 @@ p {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* The layout is `align-items: start`, so this column used to stop at its own
+     content height while the rail beside it ran on — 620px against 784px at
+     1440×900, and the 164px difference was cream directly under a stimulus that
+     was being scrolled for want of room. Stretching the column hands that slack
+     to the stage, which is a flex item with `flex: 1 1 auto` and takes it. The
+     rail keeps `start`: it is sticky, and a stretched sticky box has nothing
+     left to stick within. */
+  align-self: stretch;
 }
 /* The rail's grid cell. It carries no ink of its own — see the sticky rule
    below for why it exists at all. */
@@ -2453,7 +2573,10 @@ p {
 .results-stage {
   flex: 1 1 auto;
   position: relative;
-  background: color-mix(in srgb, var(--strong) 8%, var(--surface));
+  /* Named because the clipped-edge fade below has to end on exactly this
+     colour, and the spotlight view changes it (see .stage--spotlight). */
+  --stage-ground: color-mix(in srgb, var(--strong) 8%, var(--surface));
+  background: var(--stage-ground);
   border: 1px solid var(--edge);
   border-radius: var(--r-card);
   overflow: hidden;
@@ -2461,6 +2584,12 @@ p {
   align-items: center;
   justify-content: center;
   min-height: 320px;
+  /* The ceiling belongs on the stage in both fits, not only the scrolling one.
+     `align-self: stretch` on the column above means the stage now grows into
+     whatever the grid row gives it, and without a ceiling a tall rail — or a
+     tall region table — would pull the artboard past the height the cap was
+     measured to keep on the first screen. */
+  max-height: var(--stage-cap);
 }
 /* The stage's fit controls, at every width — and above the stage, never on it.
  *
@@ -2524,23 +2653,69 @@ p {
   align-self: stretch;
   min-width: 0;
   min-height: 0;
-  padding: 14px;
+  padding: var(--stage-pad);
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.results-stage.is-scrolling {
-  /* The same ceiling the contained figure keeps. Without it the stage simply
-     grows to the full height of a 1600px screenshot and the page scrolls
-     instead of the artboard — which puts the legend and the region table an
-     entire stimulus below the picture they describe. */
-  max-height: var(--stage-cap);
 }
 .results-stage.is-scrolling .stage-scroll {
   overflow-y: auto;
   /* A taller-than-the-stage figure has to start at the top, or the first thing
      the operator sees is the middle of the page. */
   align-items: flex-start;
+  /* A reserved track, so the stage says it scrolls before anyone touches it.
+     On its own this does nothing where scrollbars are overlays — which is every
+     Mac at its default setting, and the platform the 0px gutter was measured on
+     — so the track is also given ink: a styled scrollbar opts the scroller out
+     of overlay behaviour and paints a thumb that is there whether or not the
+     pointer is. --line/--edge are the app's own two rule weights, so the track
+     reads as part of the artboard rather than as a system widget dropped on it. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) transparent;
+}
+.results-stage.is-scrolling .stage-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.results-stage.is-scrolling .stage-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.results-stage.is-scrolling .stage-scroll::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 5px;
+}
+.results-stage.is-scrolling .stage-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--strong);
+  background-clip: padding-box;
+}
+/* The bottom edge of a stage that is still holding content back.
+ *
+ * `overflow-y: auto` was the only cue that the artboard scrolled, and on a Mac
+ * that is no cue at all: the scroller measured `offsetWidth - clientWidth = 0`,
+ * so a wireframe whose card row happened to cross the stage's lower edge was
+ * sliced clean through with nothing to say there was more. In this product that
+ * is not a cosmetic failure — the part that goes missing is the footer and the
+ * form, and a reviewer reads the picture as evidence that nobody looked at
+ * them.
+ *
+ * So the edge is drawn: the stimulus dissolves into the artboard ground over
+ * 28px, the way every canvas tool marks a clipped surface. `.is-clipped` is set
+ * only while there is something below the fold and cleared on arrival at the
+ * end (see markStageClip in ui/results.ts), so the cue is never a decoration
+ * lying about content that is fully visible — and it never covers the last
+ * pixels of a stimulus the operator has already scrolled to. */
+.results-stage.is-clipped::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 0;
+  height: 28px;
+  pointer-events: none;
+  border-radius: 0 0 var(--r-card) var(--r-card);
+  background: linear-gradient(to bottom, transparent, var(--stage-ground));
 }
 /* The measured rect, as a box rather than as a number.
  *
@@ -2576,10 +2751,14 @@ p {
   position: relative;
   display: block;
   max-width: 100%;
-  /* See --stage-cap on .results-layout: the figure and the scrolling stage
-     share one ceiling, so the two fits cannot disagree about how much of the
-     screen the picture is allowed to take. */
-  max-height: var(--stage-cap, 78vh);
+  /* See --stage-cap on .results-layout: the figure and the stage share one
+     ceiling, so the two fits cannot disagree about how much of the screen the
+     picture is allowed to take. The figure's share of it is the stage's less
+     the artboard gutter it sits inside and the stage's own border — without
+     that subtraction a contained figure drawn at exactly the cap made the stage
+     30px taller than the cap, which is 30px of the legend pushed off the first
+     screen on every study whose stimulus is height-bound. */
+  max-height: calc(var(--stage-cap, 78vh) - 2 * var(--stage-pad, 14px) - 2px);
   min-width: 0;
   /* The measured rect, always outlined, whatever was uploaded.
      An outline drawn one pixel inside rather than a border, for two reasons: a
@@ -3061,22 +3240,41 @@ p {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* The track below is positioned against the cell, so the measurement fills
+     the cell rather than hanging under the number. */
+  position: relative;
 }
 .cell-value {
   display: block;
+  /* Over the track, not under it. */
+  position: relative;
+  z-index: 1;
 }
-/* Anchored to the right edge, so the bars end on the line the numbers align to
-   and the comparison is one reading rather than two. A zero value draws no bar
-   at all — a hairline at the margin would read as "a little" rather than
-   "none". */
+/* The measurement as a filled cell, not as a rule under a number.
+ *
+ * This was `height: 3px` at 55% accent — a hairline whose longest draw measured
+ * 94px in a 102px cell. Two problems, and the second is the serious one. It is
+ * too small to compare at a glance, on the column whose entire argument is that
+ * the ranking is the finding; and the region-name input in the same row draws
+ * its own 1px underline, so a six-region table rendered as a stack of near
+ * identical thin horizontal rules of which some were data and one was an
+ * editable-field affordance. The table read as a form of blanks.
+ *
+ * A full-height tinted track cannot be mistaken for an underline — it is the
+ * treatment every analytics table uses for exactly this reason — and at 14% of
+ * the accent it sits under the digits without competing with them for the
+ * reading. Still anchored right, so the bars end on the line the numbers align
+ * to and the comparison stays one reading rather than two; still nothing at all
+ * for a zero, because a sliver at the margin would read as "a little" rather
+ * than "none". */
 .cell-bar {
-  display: block;
-  height: 3px;
-  margin: 4px 0 0 auto;
+  position: absolute;
+  inset: 3px 0 3px auto;
   width: calc(var(--v, 0) * 100%);
-  min-width: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  min-width: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  z-index: 0;
 }
 .data-table .col-action {
   width: 1%;
@@ -3143,9 +3341,19 @@ abbr[title] {
  * attribute set alongside it (see aoiSection in ui/results.ts) is the fallback
  * everywhere else, and `max-width` keeps a pasted essay from bursting the
  * column. */
+/* Dashed, so an editable field is never read as a measurement.
+ *
+ * A solid hairline under the region name sat in the same row as the measure
+ * bars, which were themselves hairlines — one row, several thin rules, one of
+ * them an affordance and the rest data. The bars are now cell-height tracks
+ * (see .cell-bar), and this side of the confusion is settled too: dashes are
+ * the long-standing convention for "type here", they cannot be mistaken for a
+ * drawn quantity at any length, and the underline goes solid on hover and focus
+ * where the field is unambiguously a field. */
 .inline-input {
   background: transparent;
   border: 1px solid transparent;
+  border-bottom-style: dashed;
   border-bottom-color: color-mix(in srgb, var(--line) 60%, transparent);
   border-radius: 4px 4px 0 0;
   color: var(--strong);
@@ -3159,10 +3367,12 @@ abbr[title] {
 }
 .inline-input:hover {
   border-color: var(--line);
+  border-bottom-style: solid;
   background: var(--bg);
 }
 .inline-input:focus {
   border-color: var(--accent);
+  border-bottom-style: solid;
   background: var(--bg);
 }
 .inline-input:focus:not(:focus-visible) {
@@ -3434,7 +3644,7 @@ abbr[title] {
  * stage, and a control that has to be restyled to survive the surface it covers
  * was always evidence that it should not have been covering it. */
 .stage--spotlight {
-  background: #41474a;
+  --stage-ground: #41474a;
   border-color: #41474a;
 }
 /* Spotlight dims the stage to a near-black mask, and a deep-teal box with a

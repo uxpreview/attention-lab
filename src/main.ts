@@ -1,6 +1,6 @@
 import "./styles.css";
 
-import { gradeTracking } from "./analysis/quality";
+import { gradeTracking, TRACKING_BAD } from "./analysis/quality";
 import { deleteStudy, listRecordings, listStudies, newId, saveStudy } from "./data/store";
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
@@ -285,20 +285,29 @@ async function showStudyList(): Promise<void> {
   };
 
   if (studies.length === 0) {
-    list.append(
-      el(
-        "div",
-        { class: "empty" },
-        el("h3", {}, "No studies yet"),
+    /* The zero state is the setup panel, so it is not also said in a box.
+     *
+     * This was a 1320×173 dashed rectangle holding "No studies yet" and one
+     * muted sentence, sitting directly under a 563px panel whose display
+     * heading, lede and drop zone already say the same thing and say it better.
+     * It was the largest element on the lower half of the landing page and
+     * carried the least — an empty state announcing emptiness underneath the
+     * thing that fills it. The dashed treatment stays where it earns its space:
+     * the filter miss below, where "nothing matched" is news.
+     *
+     * A handheld gets the sentence, because there it is not a duplicate: the
+     * setup form is deliberately not rendered on a phone (a study lives in the
+     * storage of the browser that made it), so without this the list would be
+     * nothing at all. One muted line, not a bordered void. */
+    if (isHandheld()) {
+      list.append(
         el(
           "p",
-          { class: "muted" },
-          isHandheld()
-            ? "Nothing has been recorded in this browser. Results of a session run on another machine stay on that machine."
-            : "Use the form above to add a wireframe or a URL — every session you run will collect here."
+          { class: "list-zero muted" },
+          "Nothing has been recorded in this browser. Results of a session run on another machine stay on that machine."
         )
-      )
-    );
+      );
+    }
   } else {
     for (const study of studies) {
       list.append(
@@ -687,6 +696,7 @@ function studySignal(stats: StudyStats): HTMLElement {
   const shown = stats.tracked.slice(-12);
   const hidden = stats.tracked.length - shown.length;
   const percent = (ratio: number): string => `${Math.round(ratio * 100)}%`;
+  const mean = stats.tracked.reduce((a, b) => a + b, 0) / stats.tracked.length;
 
   return el(
     "div",
@@ -712,6 +722,29 @@ function studySignal(stats: StudyStats): HTMLElement {
         return bar;
       }),
       hidden > 0 ? el("span", { class: "signal-more" }, `+${hidden}`) : null
+    ),
+    /* The grade as a number, beside the picture of it.
+     *
+     * The bars alone answered "how did these sessions compare to each other"
+     * and nothing else: a 44% bar and a 91% bar differ only in fill height, with
+     * no baseline and no scale, so "is this study healthy?" needed a hover on
+     * every bar. Twelve 6px bars also left a measured 166px of the row's third
+     * column empty, which was the void this column was introduced to fill. The
+     * mean answers the question outright, the threshold rule drawn across each
+     * track (see .signal-bar::before) gives the bars the scale they were
+     * missing, and between them the track carries information instead of air.
+     *
+     * The mean, not the last run: the rightmost bar already *is* the last run,
+     * so a number repeating it would add nothing. The title says which it is,
+     * because "82%" under a heading reading "Tracked" is otherwise a number
+     * without a scope. */
+    el(
+      "span",
+      {
+        class: `signal-value signal-${gradeTracking(mean)}`,
+        title: `Mean ${percent(mean)} of gaze samples tracked across ${stats.tracked.length} recording${stats.tracked.length === 1 ? "" : "s"}. Under ${percent(TRACKING_BAD)} is excluded from an aggregate by default.`,
+      },
+      percent(mean)
     )
   );
 }
@@ -1024,12 +1057,39 @@ function newStudyForm(
           : "Name, task, duration and the page URL can all change. Recordings already made keep the gaze they captured."
         : "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser."
     ),
-    // Pinned to the foot of the copy column, which is where the imbalance was:
-    // the copy ran out at the end of the lede while the controls column carried
-    // on through the drop zone, four fields and a submit, leaving ~230px of
-    // empty cream. The guarantee also reads better here than as the tail of a
-    // paragraph — a standing claim with a lock beside it, on the screen where
-    // someone decides whether to upload their client's unreleased wireframe.
+    // What the tool can actually resolve, said where someone is deciding to use
+    // it rather than only in the bench notes at the foot of the page.
+    //
+    // This column used to close the gap between itself and the taller controls
+    // beside it by stretching the lede's box: `flex: 1 0 auto` gave a 78px
+    // paragraph a 252px box, so the panel's own most-read column opened with
+    // 174px of cream between the lede and the guarantee under it — a paragraph
+    // that looked like it had lost its second half. Stretching a box is not a
+    // way to have something to say. This is: the resolution claim is the one
+    // fact that decides whether a study is worth running at all, and someone
+    // reading it here rather than 1,500px further down is someone who will not
+    // over-read their own heatmap.
+    //
+    // One sentence, and deliberately not the bench note's. This pair works the
+    // way the privacy pair already does — the panel states the claim, the note
+    // at the foot of the page explains it — so the numbers that qualify it (50
+    // to 120 pixels, why it is a component-sized fact) stay down there rather
+    // than being restated 200px above themselves. The note also has to keep
+    // carrying it: on a return visit this panel is collapsed to a button, and
+    // the bench notes are then the only place the caveat is made at all.
+    existing
+      ? null
+      : el(
+          "p",
+          { class: "panel-lede setup-accuracy" },
+          "Gaze lands within 2 to 4 degrees of visual angle — enough to tell you which block someone read, never which word."
+        ),
+    // At the foot of the copy column, which is where the imbalance was: the copy
+    // ran out at the end of the lede while the controls column carried on
+    // through the drop zone, four fields and a submit. The guarantee also reads
+    // better here than as the tail of a paragraph — a standing claim with a lock
+    // beside it, on the screen where someone decides whether to upload their
+    // client's unreleased wireframe.
     el(
       "p",
       { class: "privacy-note setup-privacy" },
