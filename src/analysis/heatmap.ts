@@ -147,11 +147,33 @@ export function contourBandColours(): string[] {
   return out;
 }
 
-/** How aggressively the spotlight view reveals moderately-attended regions. */
-const SPOTLIGHT_BOOST = 1.8;
-/** Dimming applied where nobody looked. Short of opaque, so context survives.
- * Exported so the spotlight legend can show the real dim rather than a guess. */
-export const SPOTLIGHT_MAX_DIM = 232;
+/**
+ * How aggressively the spotlight view reveals moderately-attended regions.
+ *
+ * 1.8 cleared a region fully at 56% of the ramp's ceiling, so most of a
+ * populated map sat at the flat top of the curve: the reveal stopped encoding
+ * how much a region was looked at and became a binary. 1.5 keeps the boost the
+ * setting exists for — a linear reveal leaves a genuinely-read region nearly as
+ * dark as an ignored one — while leaving the top third of the scale with
+ * somewhere to go.
+ */
+const SPOTLIGHT_BOOST = 1.5;
+/**
+ * Dimming applied where nobody looked, out of 255.
+ *
+ * It was 232 — 91% black — which is a room with the lights off rather than
+ * down: the wireframe outside the reveals was gone, so the revealed blobs read
+ * as white glows floating in a void with no context to place them against, and
+ * the thumbnails and text bars inside a partial reveal washed out with it. An
+ * opacity map is supposed to say "this is what they saw *of this screen*",
+ * which needs the screen to still be faintly there. 184 is about 72%: unlooked
+ * content stays legible as shape and layout, and the contrast between looked-at
+ * and not is still unmistakable — which is how Tobii's opacity map behaves.
+ *
+ * Exported so the spotlight legend and the stage's own dark ground can show the
+ * real dim rather than a guess.
+ */
+export const SPOTLIGHT_MAX_DIM = 184;
 
 /**
  * Renders points onto a canvas, replacing its contents. The canvas is expected
@@ -268,7 +290,12 @@ export function paintField(
     // punches an undimmed halo through the mask around every hot spot. The
     // colour channels stay at zero — the dimming is pure alpha.
     for (let j = 0; j < field.length; j++) {
-      const reveal = Math.min(1, ((field[j] * scale) / 255) * SPOTLIGHT_BOOST);
+      // Clamped at both ends on purpose. A fully-revealed pixel returns the
+      // stimulus at exactly 100% and no further — the mask only ever subtracts
+      // dimming it added, it never brightens — and the floor stops at
+      // SPOTLIGHT_MAX_DIM rather than at black, so the unlooked page survives as
+      // context.
+      const reveal = Math.max(0, Math.min(1, ((field[j] * scale) / 255) * SPOTLIGHT_BOOST));
       dst[j * 4 + 3] = Math.round(SPOTLIGHT_MAX_DIM * (1 - reveal));
     }
     return;

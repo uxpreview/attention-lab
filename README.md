@@ -84,15 +84,20 @@ rendered empty; what is verified and what is not; and what is still open.
   flattening every other cluster into the clear end of the ramp. The ramp
   itself starts fully transparent: a region nobody fixated is left unpainted
   rather than tinted a cold colour that reads as attention it never got.
-- **Spotlight** — the inverse: dims what was ignored. Usually the more
-  persuasive version in a readout.
+- **Spotlight** — the inverse: dims what was ignored. The dim stops short of
+  black so the rest of the screen survives as context, and a fully revealed area
+  is the stimulus at full strength, never brighter. Usually the more persuasive
+  version in a readout.
 - **Contours** — banded isolines, easier to cite exact regions from.
 - **Scanpath** — numbered fixations sized by dwell, in reading order, on a
   viridis ramp so first-to-last reads as an ordering in greyscale and under
-  colour vision deficiency. Per participant, since an averaged scanpath is
-  meaningless.
+  colour vision deficiency. Where fixations pile up, only the longest are
+  numbered, and they are numbered 1, 2, 3 over those marks — every fixation's
+  true position in the sequence is in the exported CSV. Per participant, since
+  an averaged scanpath is meaningless.
 - **Areas of interest** — draw boxes on the stimulus and get hit rate, dwell
-  time, and time-to-first-fixation per region, aggregated across participants.
+  time, and time-to-first-fixation per region, aggregated across participants,
+  sortable, with a bar in each cell because the ranking is the finding.
 - **Exports** — PNG overlay at the stimulus's native resolution, plus raw gaze,
   fixation, and AOI CSVs and a session JSON.
 

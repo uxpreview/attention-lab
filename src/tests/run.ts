@@ -17,12 +17,14 @@ import {
   paintField,
   rampColour,
   renderHeatmap,
+  SPOTLIGHT_MAX_DIM,
 } from "../analysis/heatmap";
 import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
 import {
   layoutOrdinals,
   ORDINAL_BUDGET,
+  planOrdinals,
   scanpathColour,
   selectOrdinals,
   type OrdinalLabel,
@@ -722,6 +724,21 @@ section("Heatmap overlay painting");
   check("spotlight dim rises as attention falls", monotonic);
   check("spotlight fully reveals its hottest point", alphaOf(spotlight, 0) === 0);
   check("spotlight dims unlooked regions without going opaque", alphaOf(spotlight, 5) < 255);
+  // A revealed pixel returns the stimulus at 100% and never more: the mask can
+  // only give back dimming it added, so no amount of attention can brighten the
+  // picture past what was uploaded.
+  check(
+    "the mask never subtracts past zero",
+    Array.from({ length: field.length }, (_, i) => alphaOf(spotlight, i)).every((a) => a >= 0)
+  );
+  // And the floor is a dim, not a blackout. At 232/255 the unlooked page was
+  // gone, so the reveals read as glows in a void with nothing to place them
+  // against — an opacity map has to leave the screen legible as context.
+  check(
+    "unlooked content stays legible as context",
+    SPOTLIGHT_MAX_DIM <= 200,
+    `${SPOTLIGHT_MAX_DIM}/255 dim`
+  );
 
   const heat = new Uint8ClampedArray(field.length * 4);
   paintField(field, heat, "heat", scale, 0.72);
@@ -1165,6 +1182,86 @@ section("Scanpath ordinals and ramp");
     luminance(scanpathColour(0.7, 1, 40)) < luminance(scanpathColour(0.7, 1, 55))
   );
   check("the ramp carries the alpha it is asked for", scanpathColour(0.5, 0.85).endsWith(", 0.85)"));
+}
+
+// --- What a drawn scanpath actually prints --------------------------------
+
+section("Scanpath numbering reads as an order");
+{
+  const bounds = { width: 1000, height: 700 };
+
+  // A sparse path: every fixation numbered, with its own place in the sequence.
+  const sparsePlan = planOrdinals(
+    [
+      { x: 120, y: 120, radius: 20 },
+      { x: 500, y: 200, radius: 26 },
+      { x: 300, y: 500, radius: 18 },
+    ],
+    [200, 400, 250],
+    1,
+    bounds
+  );
+  check(
+    "a sparse path numbers every fixation by its true place",
+    sparsePlan.circles.map((c) => c.ordinal).join(",") === "1,2,3"
+  );
+
+  // The failure from the screenshots: 61 fixations over six clusters. Numbering
+  // all of them displaced almost every label, and the thinning then printed the
+  // surviving *indices* — circles reading 1, 32, 14, 25, 26, 57 with grey
+  // numerals orbiting them on leader stubs and large circles carrying nothing.
+  const clusters = [
+    [200, 160],
+    [760, 200],
+    [480, 380],
+    [180, 560],
+    [820, 560],
+    [520, 640],
+  ];
+  const dense = Array.from({ length: 61 }, (_, i) => {
+    const [cx, cy] = clusters[i % clusters.length];
+    return {
+      x: cx + ((i * 37) % 40) - 20,
+      y: cy + ((i * 53) % 30) - 15,
+      radius: 14 + (i % 7) * 4,
+      // Carried through the plan so the test can ask which fixations survived;
+      // the planner copies whatever a circle brings with it.
+      seq: i,
+    };
+  });
+  const denseDurations = dense.map((_, i) => 120 + (i % 9) * 60);
+  const plan = planOrdinals(dense, denseDurations, 1, bounds);
+
+  check(
+    "a dense path is thinned rather than numbered in full",
+    plan.circles.length < dense.length && plan.circles.length > 3,
+    `${plan.circles.length} of ${dense.length} numbered`
+  );
+  // The whole point: what is printed is 1, 2, 3 … over the marks that keep a
+  // number, so the picture reads as an order instead of as a bag of indices.
+  check(
+    "the numbers printed on a dense path count 1..n",
+    plan.circles.every((c, i) => c.ordinal === i + 1),
+    plan.circles.map((c) => c.ordinal).join(",")
+  );
+  // No numeral outside a circle with a leader stub running to a mark the eye
+  // cannot find — the "orphan numerals" the picture was full of.
+  check(
+    "no ordinal on a dense path is orphaned outside its circle",
+    plan.labels.every((label) => !label.leader),
+    `${plan.labels.filter((l) => l.leader).length} displaced`
+  );
+  check(
+    "every numbered circle has exactly one label",
+    plan.labels.length === plan.circles.length
+  );
+  // Renumbering must not reorder: the marks are still read in the sequence the
+  // participant looked in.
+  const chosen = plan.circles.map((c) => c.seq);
+  check(
+    "the numbered marks stay in the order they were looked at",
+    chosen.every((v, i) => i === 0 || v > chosen[i - 1])
+  );
 }
 
 // --- Legends -------------------------------------------------------------

@@ -206,7 +206,7 @@ export function legendFor(
         ticks: null,
         swatches: null,
         caption: "The stimulus dimmed everywhere except where fixations landed.",
-        note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed. Reveal is boosted, so a moderately-attended region clears fully.",
+        note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed, and a fully revealed area is the stimulus at full strength — never brighter. The dim stops short of black, so the rest of the screen stays legible as context rather than disappearing. Reveal is boosted, so a moderately-attended region clears.",
       };
     case "scanpath":
       return {
@@ -219,11 +219,16 @@ export function legendFor(
         swatches: null,
         caption: "Fixations in order, dark first through light last; area is dwell.",
         // The ramp is viridis rather than a hue sweep, so the strip above reads
-        // as an ordering on its own — dark to light — and survives greyscale
-        // and colour vision deficiency. The thinning is stated because a reader
-        // counting numerals on a dense path would otherwise find gaps and have
-        // to guess what they mean.
-        note: "Circle area is dwell time and the numeral is the fixation's place in the sequence, dark for first through light for last. Where fixations pile up, only the longest keep their numbers, so the ones shown stay readable. One participant at a time — an averaged scanpath would be a path nobody took.",
+        // as an ordering on its own — dark to light — and survives greyscale and
+        // colour vision deficiency.
+        //
+        // The thinning is stated, and so is what the numerals actually count. On
+        // a dense path only the longest fixations are numbered and they are
+        // numbered 1, 2, 3 in sequence rather than by their true index — which
+        // is what stops the picture reading as "1, 32, 14, 25" — so a reader who
+        // counts circles and numbers and finds they disagree is owed the reason
+        // in the caption rather than left to guess at it.
+        note: "Circle area is dwell time, and colour runs dark for the first fixation through light for the last. Where fixations pile up, only the longest are numbered — the numerals count those marks in order, 1, 2, 3, and the unnumbered circles are the shorter stops between them, drawn in the same path. Every fixation keeps its true position in the sequence in the exported Fixations CSV. One participant at a time — an averaged scanpath would be a path nobody took.",
       };
     case "raw":
       return {

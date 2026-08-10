@@ -274,8 +274,13 @@ export function layoutOrdinals(
 
 /** How many displaced labels a picture can carry before numbering every
  * fixation stops communicating the order it exists to communicate. Below this,
- * leader lines are a handful of tidy callouts; above it they are a thicket. */
-export const MAX_DISPLACED_ORDINALS = 20;
+ * leader lines are a handful of tidy callouts; above it they are a thicket.
+ *
+ * It was 20, which is a thicket: on a 61-fixation recording the stage carried a
+ * dozen-odd numerals sitting outside any circle on short leader stubs, and a
+ * reader's first reading of the picture was "the renderer is broken". Ten is
+ * about where callouts still read as callouts. */
+export const MAX_DISPLACED_ORDINALS = 10;
 
 /** How many ordinals survive the thinning. Twenty numbers is already more than
  * a reader will trace in order; the point of the cut is that the ones that
@@ -317,6 +322,60 @@ export function selectOrdinals(durations: number[], budget = ORDINAL_BUDGET): nu
   }
 
   return [...keep].sort((a, b) => a - b);
+}
+
+/** What a drawn scanpath prints: which circles carry a number, what number each
+ * one carries, and where that numeral goes. */
+export interface OrdinalPlan<T extends OrdinalCircle = OrdinalCircle> {
+  /** Only the circles that carry a number, each with the number it carries. */
+  circles: Array<T & { ordinal: number }>;
+  labels: OrdinalLabel[];
+}
+
+/**
+ * Decides which fixations are numbered and what they are numbered.
+ *
+ * Under the collision budget every fixation keeps its own place in the sequence,
+ * which is the ideal case and the common one on a short path.
+ *
+ * Past it, the picture was unreadable in a way no legend could rescue. A
+ * 61-fixation recording drew circles labelled 1, 32, 14, 25, 26, 57 — the
+ * surviving indices of the longest fixations — plus small grey numerals sitting
+ * outside any circle on leader stubs, plus large circles carrying no number at
+ * all: three states, one of them explained. The first thing a reader concluded
+ * was that the renderer was broken.
+ *
+ * So a thinned path is numbered 1, 2, 3 over the marks that keep a number, and
+ * the set is narrowed until every one of those numerals sits inside its own
+ * circle — renumbering shortens the labels, which frees space, so this settles
+ * in a pass or two. What is left is two states a sentence can explain: a circle
+ * with a number in it, or a circle without one. The true index of every fixation
+ * is still exported in full by the Fixations CSV, which is where "the 57th
+ * fixation" is worth something.
+ *
+ * Pure and exported: this is the part worth testing.
+ */
+export function planOrdinals<T extends OrdinalCircle>(
+  circles: T[],
+  durations: number[],
+  scale = 1,
+  bounds?: OrdinalBounds
+): OrdinalPlan<T> {
+  let numbered = circles.map((c, i) => ({ ...c, ordinal: i + 1 }));
+  let labels = layoutOrdinals(numbered, scale, bounds);
+  if (labels.filter((label) => label.leader).length <= MAX_DISPLACED_ORDINALS) {
+    return { circles: numbered, labels };
+  }
+
+  let candidates = selectOrdinals(durations);
+  for (let pass = 0; pass < 4; pass++) {
+    numbered = candidates.map((index, place) => ({ ...circles[index], ordinal: place + 1 }));
+    labels = layoutOrdinals(numbered, scale, bounds);
+    const clear = candidates.filter((_, i) => !labels[i].leader);
+    if (clear.length === candidates.length || clear.length === 0) break;
+    candidates = clear;
+  }
+  return { circles: numbered, labels };
 }
 
 export function renderScanpath(
@@ -403,23 +462,15 @@ export function renderScanpath(
   if (!showNumbers) return;
 
   // Ordinals in a second pass, so a later circle cannot paint over an earlier
-  // number.
-  //
-  // The first pass is also the density measurement: every label that had to
-  // leave its circle reports one collision, and past MAX_DISPLACED_ORDINALS of
-  // them the numbers have stopped being readable as an ordering. In that case
-  // the longest fixations keep their numbers and the pass is re-run over only
-  // those — which is not just fewer labels but better-placed ones, since most
-  // of them can now sit inside their own circle where they belong.
-  const bounds = { width, height };
-  let numbered = circles.map((c, i) => ({ ...c, ordinal: i + 1 }));
-  let labels = layoutOrdinals(numbered, scale, bounds);
-
-  if (labels.filter((label) => label.leader).length > MAX_DISPLACED_ORDINALS) {
-    const keep = selectOrdinals(fixations.map((f) => f.duration));
-    numbered = keep.map((i) => ({ ...circles[i], ordinal: i + 1 }));
-    labels = layoutOrdinals(numbered, scale, bounds);
-  }
+  // number. Which circles get one, and what they say, is planOrdinals' decision
+  // — see the note on it for why a dense path is renumbered rather than showing
+  // the surviving indices of the original sequence.
+  const { circles: numbered, labels } = planOrdinals(
+    circles,
+    fixations.map((f) => f.duration),
+    scale,
+    { width, height }
+  );
 
   for (let i = 0; i < numbered.length; i++) {
     const c = numbered[i];

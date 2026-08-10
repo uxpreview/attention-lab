@@ -110,7 +110,7 @@ function specElement(spec: LegendSpec): HTMLElement {
         "details",
         { class: "legend-how" },
         el("summary", {}, "How to read this"),
-        el("p", { class: "legend-note muted" }, spec.note)
+        el("p", { class: "legend-note" }, spec.note)
       )
     )
   );

@@ -30,6 +30,7 @@ import {
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
 import { appBar } from "./chrome";
+import { controlBandHeight, FIT_SCALE_FLOOR, fitStimulus } from "./record";
 import {
   clear,
   confirmButton,
@@ -43,6 +44,9 @@ import {
 import { legendElement } from "./legend";
 
 type ViewMode = OverlayMode;
+
+/** Which measured column the region table is ranked by. */
+type AoiSortKey = "seen" | "dwell" | "ttff";
 
 const VIEW_MODES: ViewMode[] = ["heat", "spotlight", "contour", "scanpath", "raw"];
 
@@ -59,6 +63,16 @@ export interface ResultsOptions {
   onRunSession?: (() => void) | null;
   /** Why a session cannot be started from here, if it cannot. */
   runBlockedReason?: string | null;
+  /**
+   * The participant whose calibration is cached for this sitting, if any.
+   *
+   * Passed in rather than read here: the cache is session storage owned by the
+   * app shell (see CALIBRATION_KEY in main.ts), and a second module reaching for
+   * the same key by name is how two readers of one store drift apart. It is a
+   * fact worth showing on an empty results screen, because it changes what the
+   * next session costs.
+   */
+  reusableCalibration?: string | null;
 }
 
 /**
@@ -95,6 +109,9 @@ export async function renderResults(
    * visibility on its own switch for the same reason. Defaults on, because a
    * region you cannot see is a region you forget you drew. */
   let showAois = true;
+  /** How the region table is ordered, or null for the order the regions were
+   * drawn in — which is the order their badges are numbered in. */
+  let aoiSort: { key: AoiSortKey; dir: 1 | -1 } | null = null;
 
   // A recording below the quality threshold is not evidence, and the app's own
   // bench notes say why: a bad calibration "looks exactly like data". Folding a
@@ -240,24 +257,35 @@ export async function renderResults(
    * the failure the print stylesheet used to have.
    */
   const lightboxBody = el("div", { class: "lightbox-body" });
+  // A wireframe is wider than it is tall and a phone is not; there is no honest
+  // way to fix that in CSS without rotating the figure, which would put every
+  // pointer coordinate in the region layer out of register with the picture.
+  // Saying so costs one line — but only where the advice can be taken. It
+  // rendered unconditionally, so a 1440px desktop window was told to rotate a
+  // monitor.
+  const lightboxHint = el("p", { class: "lightbox-hint", hidden: true }, "Rotate for a wider view");
+  const canRotate = (): boolean =>
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(orientation: portrait) and (max-width: 700px)").matches;
   const lightbox = el(
     "dialog",
     { class: "figure-lightbox", "aria-label": `${study.name}, full screen` },
-    lightboxBody,
+    // The bar is a row of the dialog, not a scrim over the picture. It used to
+    // be absolutely positioned across the top with a cream gradient behind it,
+    // which put 44px of wash over the top band of the very stimulus "Expand"
+    // exists to show closely — on a wireframe that band is the nav, and usually
+    // region 1.
     el(
       "div",
       { class: "lightbox-bar" },
-      // A wireframe is wider than it is tall and a phone is not; there is no
-      // honest way to fix that in CSS without rotating the figure, which would
-      // put every pointer coordinate in the region layer out of register with
-      // the picture. Saying so costs one line.
-      el("p", { class: "lightbox-hint" }, "Rotate for a wider view"),
+      lightboxHint,
       el(
         "button",
         { class: "btn btn-small", type: "button", onclick: () => lightbox.close() },
         "Close"
       )
-    )
+    ),
+    lightboxBody
   );
   const zoomButton = el(
     "button",
@@ -266,6 +294,7 @@ export async function renderResults(
       type: "button",
       onclick: () => {
         lightboxBody.append(figure);
+        lightboxHint.hidden = !canRotate();
         lightbox.showModal();
         // The figure's box has just changed by a factor of four; the canvas
         // backing store has to follow it or the overlay is an upscaled blur.
@@ -347,7 +376,39 @@ export async function renderResults(
     stimulusImage || hasRecordings
       ? el("div", { class: "stage-tools" }, stimulusImage ? fitButton : null, zoomButton)
       : null;
-  stage.append(...(stageTools ? [stageTools] : []), lightbox);
+  /**
+   * The tools sit in a bar above the stage, not on it.
+   *
+   * They were pinned to the stage's top-right corner, and measurement at twelve
+   * widths from 1440 down to 390 found them intersecting the figure in all
+   * twelve — 1,079 to 5,313 px² of the stimulus underneath a pair of buttons,
+   * and at every width one of those buttons was over the first region box. The
+   * spotlight view re-tinted them to survive the mask, which concedes the
+   * problem rather than fixing it. This app's one claim is "here is where they
+   * looked at this region"; furniture parked on the region is the one kind of
+   * chrome it cannot afford. Every annotation tool puts stage controls in a
+   * toolbar above the canvas for exactly this reason.
+   *
+   * The bar's left half is not filler: it says what the measured rect is, which
+   * is the number every figure on this screen is normalised against.
+   */
+  const stageBar = stageTools
+    ? el(
+        "div",
+        { class: "stage-bar" },
+        stimulusImage
+          ? el(
+              "p",
+              { class: "stage-meta" },
+              study.stimulus.kind === "image"
+                ? `${study.stimulus.width} × ${study.stimulus.height} px`
+                : ""
+            )
+          : null,
+        stageTools
+      )
+    : null;
+  stage.append(lightbox);
 
   const legend = el("figure", { class: "legend-slot" });
   // Regions and recordings live under the stage, at the width of the stage.
@@ -378,7 +439,7 @@ export async function renderResults(
   const layout = el(
     "div",
     { class: "results-layout" },
-    el("div", { class: "results-main" }, stage, emptyStrip, legend),
+    el("div", { class: "results-main" }, stageBar, stage, emptyStrip, legend),
     rail,
     dataBlock
   );
@@ -387,13 +448,27 @@ export async function renderResults(
   // toolbar action rather than the last block of a sidebar — where it sat below
   // the fold of an invisible nested scroller. One button, not five: the header
   // read as six equivalent pills, of which the first was not a control at all.
-  const exportMenu = el("div", { class: "menu", role: "menu", hidden: true });
+  /**
+   * A disclosure, and it now says so.
+   *
+   * It carried `role="menu"`, `role="menuitem"` and `aria-haspopup="true"` while
+   * implementing none of the menu pattern: no arrow keys, no roving focus, no
+   * focus moved into the panel on open, and Tab walking straight past it into
+   * the page behind. A promised keyboard contract that does not exist is worse
+   * than an honest simpler one — a screen-reader user told "menu" presses Down
+   * and nothing happens. So the roles are gone: this is a button that shows a
+   * group of buttons, which is exactly what `aria-expanded` on a plain button
+   * describes, and Tab through them works because they are ordinary buttons in
+   * document order. Escape closes and returns focus (see onDocumentKey); moving
+   * focus out of the group closes it too, so Tab past the last item cannot leave
+   * an open panel floating behind the cursor.
+   */
+  const exportMenu = el("div", { class: "menu", hidden: true });
   const exportToggle = el(
     "button",
     {
       class: "btn btn-small",
       type: "button",
-      "aria-haspopup": "true",
       "aria-expanded": "false",
       onclick: () => setExportOpen(exportMenu.hidden),
     },
@@ -440,7 +515,6 @@ export async function renderResults(
       {
         class: "menu-item",
         type: "button",
-        role: "menuitem",
         "data-key": key,
         onclick: () => {
           setExportOpen(false);
@@ -491,6 +565,13 @@ export async function renderResults(
   const onDocumentPointer = (event: Event) => {
     if (!exportBar.contains(event.target as Node)) setExportOpen(false);
   };
+  // The keyboard equivalent of clicking away: tabbing out of the group closes
+  // it, so the panel cannot stay open behind a cursor that has left it.
+  exportBar.addEventListener("focusout", (event: FocusEvent) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && exportBar.contains(next)) return;
+    setExportOpen(false);
+  });
   const onDocumentKey = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || exportMenu.hidden) return;
     setExportOpen(false);
@@ -596,7 +677,11 @@ export async function renderResults(
         scale: dpr,
       });
     } else if (mode === "raw") {
-      renderRawPoints(overlay, set.map((a) => a.recording));
+      renderRawPoints(
+        overlay,
+        set.map((a) => a.recording),
+        dpr
+      );
     } else {
       const points: HeatPoint[] = [];
       for (const a of set) {
@@ -807,6 +892,73 @@ export async function renderResults(
     ];
   }
 
+  /**
+   * The study's own facts, for the rail of a screen with nothing measured yet.
+   *
+   * The on-screen scale is quoted from `fitStimulus` — the same function the
+   * recording stage decides with and the setup form already prints — rather than
+   * recomputed here. A briefing that disagreed with what the participant is
+   * about to see would be worse than no briefing.
+   */
+  function studyBriefing(): HTMLElement[] {
+    const rows: HTMLElement[] = [el("h3", {}, "This study")];
+
+    if (study.stimulus.kind === "image") {
+      const { width, height } = study.stimulus;
+      rows.push(statRow("Stimulus", `${width} × ${height}`));
+      const fit = fitStimulus(
+        { width, height },
+        {
+          width: window.innerWidth,
+          height: Math.max(1, window.innerHeight - controlBandHeight(window.innerHeight)),
+        }
+      );
+      const percent = Math.round(fit.scale * 100);
+      rows.push(
+        statRow(
+          "On this screen",
+          `${percent}%`,
+          fit.scale < FIT_SCALE_FLOOR ? "warn" : undefined,
+          fit.scale < FIT_SCALE_FLOOR
+            ? "Small labels may be unreadable at this size, which puts the finding in doubt rather than only the look of it."
+            : fit.mode === "width"
+              ? "Taller than the recording stage, so it is shown at full width and scrolled."
+              : "Fits the recording stage whole."
+        )
+      );
+    } else {
+      rows.push(statRow("Stimulus", "Live page"));
+    }
+
+    rows.push(
+      statRow("Duration", study.duration > 0 ? `${study.duration}s` : "Manual stop")
+    );
+
+    rows.push(
+      el(
+        "p",
+        { class: "brief-task" },
+        study.task
+          ? `“${study.task}”`
+          : "No task set — a free-viewing heatmap mostly shows where the biggest image is."
+      )
+    );
+
+    // Only when it is true, and named, because "reuse a calibration" is only
+    // reassuring if you can see whose.
+    if (options.reusableCalibration) {
+      rows.push(
+        el(
+          "p",
+          { class: "note" },
+          `${options.reusableCalibration}'s calibration from this sitting can be reused, so the next session can skip straight to the task.`
+        )
+      );
+    }
+
+    return rows;
+  }
+
   function buildSidebar(): void {
     /**
      * The empty state, in the rail rather than instead of it.
@@ -842,7 +994,17 @@ export async function renderResults(
           el("li", {}, "Heatmap, spotlight, contour and scanpath views arrive with the first recording.")
         ),
         runAction(),
-        ...(noStimulusYet ? [] : [regionToggle()])
+        ...(noStimulusYet ? [] : [regionToggle()]),
+        // The rail's other half, before there is any data to put in it.
+        //
+        // Kept at zero recordings so the empty screen has the same skeleton as
+        // the populated one — but three bullets and a button left a measured
+        // 385px of empty cream under them, about 40% of the screen unused. What
+        // belongs there is the briefing: what this study will actually show a
+        // participant, at what size, with what task and for how long. Every one
+        // of those is a decision someone can still change for free right now,
+        // and impossible to change once recordings exist.
+        ...studyBriefing()
       );
       return;
     }
@@ -1089,6 +1251,18 @@ export async function renderResults(
       activeSet().map((a) => a.aoiResults)
     );
 
+    // The ranking *is* the finding, and a column of unaligned decimals does not
+    // carry it: "2.7s / 4.9s / 0ms / 17.3s / 1.8s" left the reader adding up
+    // digits to notice that one region is six times everything else. Each
+    // measure gets a bar scaled to the largest value in the current selection —
+    // the same device Tobii, Hotjar and Maze all put in this cell — so the shape
+    // of the result is legible before any number is read.
+    const maxHitRate = Math.max(...aggregates.map((a) => a.hitRate), 0);
+    const maxDwell = Math.max(
+      ...aggregates.map((a) => (a.hitRate > 0 ? a.meanDwell : 0)),
+      0
+    );
+
     section.append(
       el(
         "table",
@@ -1106,12 +1280,15 @@ export async function renderResults(
             el("th", {}, "Region"),
             // Without recordings these columns would be four columns of zeroes
             // presented as measurements.
-            hasRecordings ? el("th", {}, "Seen") : null,
-            hasRecordings ? el("th", {}, "Dwell") : null,
+            hasRecordings ? sortableHeader("Seen", "seen") : null,
+            hasRecordings ? sortableHeader("Dwell", "dwell") : null,
             // An acronym nobody outside the field reads on sight, in a tool
             // whose whole claim is that it explains its own numbers.
             hasRecordings
-              ? el("th", {}, el("abbr", { title: "Time to first fixation" }, "TTFF"))
+              ? sortableHeader(
+                  el("abbr", { title: "Time to first fixation" }, "TTFF"),
+                  "ttff"
+                )
               : null,
             el("th", { class: "col-action" }, el("span", { class: "sr-only" }, "Remove"))
           )
@@ -1119,7 +1296,7 @@ export async function renderResults(
         el(
           "tbody",
           {},
-          ...aggregates.map((agg, index) =>
+          ...sortRows(aggregates).map(({ agg, index }) =>
             el(
               "tr",
               {
@@ -1139,8 +1316,20 @@ export async function renderResults(
                 el("input", {
                   class: "inline-input",
                   value: agg.label,
+                  // The underline is the affordance, so it has to be the width
+                  // of the name: at `width: 100%` six regions drew six ~270px
+                  // hairlines floating out past the end of every word, the
+                  // heaviest lines in a table of numbers. `field-sizing` does
+                  // this natively where it exists; `size` is the fallback that
+                  // has worked since forever, and both are kept in step as the
+                  // name is typed.
+                  size: String(Math.max(8, agg.label.length)),
                   "aria-label": "Region name",
                   "data-key": `aoi-name-${agg.aoiId}`,
+                  oninput: (event: Event) => {
+                    const input = event.target as HTMLInputElement;
+                    input.size = Math.max(8, input.value.length);
+                  },
                   onchange: (event: Event) => {
                     const aoi = aois.find((a) => a.id === agg.aoiId);
                     if (aoi) {
@@ -1160,10 +1349,17 @@ export async function renderResults(
               // number instead of sitting in a column header that is no longer
               // over it. See .cell-measure in styles.css.
               hasRecordings
-                ? el("td", { class: "cell-measure", "data-label": "Seen" }, formatPercent(agg.hitRate))
+                ? measureCell("Seen", formatPercent(agg.hitRate), agg.hitRate, maxHitRate)
                 : null,
+              // A region nobody fixated used to print three different nulls
+              // across one row — "0%", "0ms", "—". Only the hit rate is a real
+              // zero there; a mean dwell over no fixations is not a duration of
+              // zero, it is an absence, and it is written like the TTFF beside
+              // it.
               hasRecordings
-                ? el("td", { class: "cell-measure", "data-label": "Dwell" }, formatMs(agg.meanDwell))
+                ? agg.hitRate > 0
+                  ? measureCell("Dwell", formatMs(agg.meanDwell), agg.meanDwell, maxDwell)
+                  : measureCell("Dwell", "—", 0, maxDwell)
                 : null,
               hasRecordings ? ttffCell(agg.meanTimeToFirstFixation) : null,
               el("td", { class: "cell-action" }, aoiDeleteButton(agg.aoiId, agg.label))
@@ -1175,9 +1371,112 @@ export async function renderResults(
     return section;
   }
 
+  /**
+   * A sortable column head.
+   *
+   * The table had no sort at all, so "which region won" was a question you
+   * answered by reading six rows of decimals. One click ranks by that measure —
+   * biggest first for the two "more is more" columns, soonest first for TTFF,
+   * because that is the direction each one is interesting in — and a second
+   * click reverses it. A third returns the table to drawing order, which is the
+   * order the badges on the stimulus are numbered in and therefore the only
+   * order that is not an opinion.
+   */
+  function sortableHeader(label: string | HTMLElement, key: AoiSortKey): HTMLElement {
+    const active = aoiSort?.key === key;
+    return el(
+      "th",
+      {
+        class: "col-measure",
+        // Announced, not just drawn: a sorted table that says nothing about
+        // being sorted is a table a screen-reader user reads in a mystery order.
+        "aria-sort": active ? (aoiSort?.dir === 1 ? "ascending" : "descending") : "none",
+      },
+      el(
+        "button",
+        {
+          class: `th-sort ${active ? "is-active" : ""}`,
+          type: "button",
+          "data-key": `sort-${key}`,
+          onclick: () => {
+            // Descending first for Seen and Dwell — the biggest number is the
+            // finding. Ascending first for TTFF, where the smallest is.
+            const first: 1 | -1 = key === "ttff" ? 1 : -1;
+            if (!aoiSort || aoiSort.key !== key) aoiSort = { key, dir: first };
+            else if (aoiSort.dir === first) aoiSort = { key, dir: first === 1 ? -1 : 1 };
+            else aoiSort = null;
+            renderData();
+          },
+        },
+        label,
+        el(
+          "span",
+          { class: "th-caret", "aria-hidden": "true" },
+          active ? (aoiSort?.dir === 1 ? "↑" : "↓") : "↕"
+        )
+      )
+    );
+  }
+
+  /** Rows in the order the table should print them, each keeping the ordinal of
+   * the box it names — the badge on the stimulus is numbered by drawing order,
+   * so sorting the rows must not renumber the regions. */
+  function sortRows(
+    aggregates: ReturnType<typeof aggregateAois>
+  ): Array<{ agg: (typeof aggregates)[number]; index: number }> {
+    const rows = aggregates.map((agg, index) => ({ agg, index }));
+    if (!aoiSort) return rows;
+    const sort = aoiSort;
+    // A region with no data has no place in a ranking of the data, so it sinks
+    // to the bottom whichever way the column is pointed.
+    const valueOf = ({ agg }: (typeof rows)[number]): number | null => {
+      if (sort.key === "seen") return agg.hitRate;
+      if (sort.key === "dwell") return agg.hitRate > 0 ? agg.meanDwell : null;
+      return agg.meanTimeToFirstFixation;
+    };
+    return rows.sort((a, b) => {
+      const av = valueOf(a);
+      const bv = valueOf(b);
+      if (av === null || bv === null) {
+        if (av === bv) return a.index - b.index;
+        return av === null ? 1 : -1;
+      }
+      return av === bv ? a.index - b.index : (av - bv) * sort.dir;
+    });
+  }
+
+  /**
+   * One measured cell: the number, right-aligned on tabular figures, over a bar
+   * scaled to the largest value in this table.
+   *
+   * The bar is drawn from the right edge so it shares the numbers' alignment —
+   * six bars ending on the same line is the comparison; six bars starting on the
+   * same line with unaligned decimals above them is two competing readings of
+   * one column. A zero draws no bar at all, because a hairline at the right
+   * margin would read as a small value rather than none.
+   */
+  function measureCell(
+    label: string,
+    text: string,
+    value: number,
+    max: number
+  ): HTMLElement {
+    const fraction = max > 0 && value > 0 ? Math.min(1, value / max) : 0;
+    const bar = el("span", { class: "cell-bar", "aria-hidden": "true" });
+    bar.style.setProperty("--v", fraction.toFixed(3));
+    return el(
+      "td",
+      { class: "cell-measure", "data-label": label },
+      el("span", { class: "cell-value" }, text),
+      fraction > 0 ? bar : null
+    );
+  }
+
   /** One region's time to first fixation, with the same sub-sample floor the
    * summary row uses. A table that prints "0ms" beside a graded dwell figure is
-   * reporting a broken counter, not a measurement. */
+   * reporting a broken counter, not a measurement. TTFF gets no bar: sooner is
+   * better, so a long bar would encode "worse" in a column where every other bar
+   * encodes "more". */
   function ttffCell(ms: number | null): HTMLElement {
     if (ms === null) return el("td", { class: "cell-measure", "data-label": "TTFF" }, "—");
     const onset = formatOnset(ms);
@@ -1405,7 +1704,7 @@ export async function renderResults(
     // stays whole: every recording, low-signal ones included and graded. The
     // rule divides it from the four above it, because "different promise" is
     // not something five identical rows can say.
-    el("div", { class: "menu-sep", role: "separator" }),
+    el("div", { class: "menu-sep", "aria-hidden": "true" }),
     exportItem("Session JSON", "export-json", () => exportStudyJson(study, recordings))
   );
 
@@ -1468,38 +1767,71 @@ function averageOf(values: number[]): number | null {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-function renderRawPoints(canvas: HTMLCanvasElement, recordings: Recording[]): void {
+/**
+ * A soft density field, not a stack of hard discs.
+ *
+ * Each sample was a 2.5px disc filled once at 0.35 alpha, and roughly thirty
+ * samples land inside a single fixation: they saturated to opaque and their
+ * union came out as a ~14px rounded square with a hard edge — in the one view
+ * whose whole job is to show the tracker's raw honesty, the samples read as a
+ * sprite artifact. The legend promises "density reads as saturation", which
+ * needs a mark that is faint at the edge and stacks smoothly.
+ *
+ * So the mark is a radial-gradient sprite drawn once per participant colour into
+ * an offscreen canvas and blitted per sample: wider (so a cluster is a cloud
+ * rather than a tile), much fainter (so it takes real density to approach
+ * opaque), and with no edge to align into a straight one. A minute of gaze is
+ * ~1800 samples; drawImage of a small sprite is faster than the arc-and-fill it
+ * replaces, and this runs on a debounced redraw rather than per frame.
+ */
+function renderRawPoints(
+  canvas: HTMLCanvasElement,
+  recordings: Recording[],
+  scale = 1
+): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Stated rather than inherited: the canvas is shared with the heat overlay,
+  // and a stacking density field is only a density field under source-over.
+  ctx.globalCompositeOperation = "source-over";
 
-  // Round dots, one fill each.
-  //
-  // These were 5px fillRects, on the argument that a square is indistinguishable
-  // from a circle at this size. It is not: at 1× the cloud reads as pixel debris
-  // rather than as samples, which is the wrong impression of the one view that
-  // shows the tracker's raw output.
-  //
-  // One path for the whole cloud with a single fill at the end would be cheaper
-  // still, but it would also flatten the thing this view is for: within a single
-  // path, overlapping subpaths are painted once, so a dense cluster would come
-  // out the same 0.35 alpha as a lone stray. The legend promises "density reads
-  // as saturation", so each sample is filled on its own and the alpha stacks.
-  // A minute of gaze is ~1800 samples per participant; this is a few
-  // milliseconds on a debounced redraw, not a per-frame cost.
-  //
-  // Colours come from the shared categorical palette, which is also what the
-  // legend keys — three unattributable dot clouds are worse than one.
-  const radius = 2.5;
-  const TAU = Math.PI * 2;
+  const radius = Math.max(3, 4 * scale);
   recordings.forEach((recording, index) => {
-    ctx.fillStyle = participantColour(index, 0.35);
+    const sprite = dotSprite(index, radius);
+    if (!sprite) return;
     for (const p of recording.points) {
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, radius, 0, TAU);
-      ctx.fill();
+      ctx.drawImage(
+        sprite,
+        p.x * canvas.width - radius,
+        p.y * canvas.height - radius
+      );
     }
   });
+}
+
+/**
+ * One gaze sample, as a pre-rendered sprite in a participant's colour: a faint
+ * flat core so a lone sample is still visible as a sample, falling to nothing at
+ * the rim so overlapping ones add into a cloud instead of tiling into a slab.
+ *
+ * All three stops come from the same `participantColour` the legend keys, so
+ * there is no second definition of "P02's colour" to drift.
+ */
+function dotSprite(participantIndex: number, radius: number): HTMLCanvasElement | null {
+  const size = Math.ceil(radius * 2);
+  const sprite = document.createElement("canvas");
+  sprite.width = size;
+  sprite.height = size;
+  const ctx = sprite.getContext("2d");
+  if (!ctx) return null;
+  const gradient = ctx.createRadialGradient(radius, radius, 0, radius, radius, radius);
+  gradient.addColorStop(0, participantColour(participantIndex, 0.14));
+  gradient.addColorStop(0.4, participantColour(participantIndex, 0.1));
+  gradient.addColorStop(1, participantColour(participantIndex, 0));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return sprite;
 }
 
 /**
@@ -1522,7 +1854,16 @@ function renderAoiBoxes(layer: HTMLElement, aois: Aoi[]): void {
   aois.forEach((aoi, index) => {
     const box = el(
       "div",
-      { class: "aoi-box", "data-aoi": aoi.id },
+      {
+        // A region drawn against the top edge has no room above it for the name
+        // chip, which is drawn 23px up: it would be cut off by the stage — the
+        // same clipping the numbered badge used to suffer. The chip drops inside
+        // the box for those, which is the one case where covering a few pixels
+        // of stimulus beats not being readable at all, and it is only up while
+        // the box is hovered or its table row is.
+        class: aoi.y < 0.035 ? "aoi-box is-top" : "aoi-box",
+        "data-aoi": aoi.id,
+      },
       el("span", { class: "aoi-ordinal", "aria-hidden": "true" }, String(index + 1)),
       el("span", { class: "aoi-label" }, aoi.label)
     );

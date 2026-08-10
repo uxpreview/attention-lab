@@ -1,5 +1,6 @@
 import "./styles.css";
 
+import { gradeTracking } from "./analysis/quality";
 import { deleteStudy, listRecordings, listStudies, newId, saveStudy } from "./data/store";
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
@@ -239,6 +240,9 @@ async function showStudyList(): Promise<void> {
           {
             count: recordings.length,
             lastRun: recordings.reduce((latest, r) => Math.max(latest, r.createdAt), 0) || null,
+            tracked: [...recordings]
+              .sort((a, b) => a.createdAt - b.createdAt)
+              .map((r) => r.quality.trackingRatio),
           },
         ];
       })
@@ -248,6 +252,37 @@ async function showStudyList(): Promise<void> {
   const header = experimentHead();
 
   const list = el("section", { class: "study-list" });
+
+  /** Nothing matched the filter — distinct from having no studies at all, and
+   * the difference matters: one is an empty tool, the other is a typo. */
+  const noMatches = el(
+    "div",
+    { class: "empty", hidden: true },
+    el("h3", {}, "No studies match"),
+    el("p", { class: "muted" }, "Clear the search, or drop the “with recordings” filter.")
+  );
+
+  /**
+   * Client-side filtering over the cards already rendered.
+   *
+   * Every study is in the DOM and every count is already in `stats`, so this is
+   * a pass over nodes rather than a re-render — which keeps the thumbnails from
+   * reloading their blobs on every keystroke.
+   */
+  const applyFilter = (query: string, onlyWithRecordings: boolean): number => {
+    const needle = query.trim().toLowerCase();
+    let shown = 0;
+    for (const card of Array.from(list.querySelectorAll<HTMLElement>(".study-card"))) {
+      const haystack = `${card.dataset.name ?? ""} ${card.dataset.task ?? ""}`.toLowerCase();
+      const matches =
+        (needle === "" || haystack.includes(needle)) &&
+        (!onlyWithRecordings || card.dataset.count !== "0");
+      card.hidden = !matches;
+      if (matches) shown++;
+    }
+    noMatches.hidden = shown > 0 || studies.length === 0;
+    return shown;
+  };
 
   if (studies.length === 0) {
     list.append(
@@ -266,8 +301,11 @@ async function showStudyList(): Promise<void> {
     );
   } else {
     for (const study of studies) {
-      list.append(studyCard(study, stats.get(study.id) ?? { count: 0, lastRun: null }));
+      list.append(
+        studyCard(study, stats.get(study.id) ?? { count: 0, lastRun: null, tracked: [] })
+      );
     }
+    list.append(noMatches);
   }
 
   // The tool sits inside the page the way an experiment sits inside a
@@ -283,7 +321,7 @@ async function showStudyList(): Promise<void> {
       "div",
       { class: "container" },
       blockNoticeSlot(),
-      isHandheld() ? null : setupSection(editing, studies.length),
+      isHandheld() ? null : setupSection(editing, studies.length, applyFilter),
       list
     )
   );
@@ -302,7 +340,12 @@ async function showStudyList(): Promise<void> {
  * reading, and an edit, which is a form by definition. Otherwise it collapses
  * to one button that expands it in place.
  */
-function setupSection(editing: Study | null, studyCount: number): HTMLElement {
+function setupSection(
+  editing: Study | null,
+  studyCount: number,
+  /** Narrows the rendered list; returns how many cards survived. */
+  applyFilter: (query: string, onlyWithRecordings: boolean) => number
+): HTMLElement {
   const slot = el("div", { class: "setup-slot" });
 
   const showForm = (existing: Study | null, collapsible: boolean): void => {
@@ -310,18 +353,67 @@ function setupSection(editing: Study | null, studyCount: number): HTMLElement {
     slot.append(newStudyForm(existing, collapsible ? showBar : null));
   };
 
+  /**
+   * Search and a data filter, once there are enough studies to need them.
+   *
+   * The list renders every study, newest first, with no way to find one but
+   * scrolling 107px rows. Three studies is fine; a researcher accumulates
+   * dozens, and every project list in this category — Maze, Hotjar — leads with
+   * search for that reason. Both filters are pure client-side passes over cards
+   * that are already in the DOM and counts that were already computed for the
+   * meta line, so nothing is fetched and no thumbnail is re-decoded.
+   *
+   * Below the threshold they are not drawn at all: a search field over three
+   * rows is furniture that makes a small list look like a big one.
+   */
+  const FILTER_FROM = 4;
+
   function showBar(): void {
     clear(slot);
+    const count = el("span", { class: "pill pill-count" }, String(studyCount));
+    let onlyWithRecordings = false;
+
+    const search = el("input", {
+      class: "input input-search",
+      type: "search",
+      id: "study-search",
+      placeholder: "Search name or task",
+      "aria-label": "Search studies by name or task",
+    });
+    const withData = el(
+      "button",
+      {
+        class: "btn btn-quiet btn-small",
+        type: "button",
+        "aria-pressed": "false",
+      },
+      "With recordings"
+    );
+
+    const refresh = (): void => {
+      const shown = applyFilter(search.value, onlyWithRecordings);
+      // The pill counts what is on the screen, and says so when that is not
+      // everything — a list head reading "12" over four visible rows is the
+      // filter lying about its own effect.
+      count.textContent = shown === studyCount ? String(studyCount) : `${shown} of ${studyCount}`;
+    };
+
+    search.addEventListener("input", refresh);
+    withData.addEventListener("click", () => {
+      onlyWithRecordings = !onlyWithRecordings;
+      withData.classList.toggle("is-active", onlyWithRecordings);
+      withData.setAttribute("aria-pressed", onlyWithRecordings ? "true" : "false");
+      refresh();
+    });
+
     slot.append(
       el(
         "div",
         { class: "list-head" },
-        el(
-          "h2",
-          { class: "list-head-title" },
-          "Studies",
-          el("span", { class: "pill pill-count" }, String(studyCount))
-        ),
+        el("h2", { class: "list-head-title" }, "Studies", count),
+        studyCount >= FILTER_FROM
+          ? el("div", { class: "list-tools" }, search, withData)
+          : null,
         // Outlined, not filled. Every filled pill on this screen is a row's
         // "Run session" — one per study, in one column — and adding a fourth
         // fill in a different band for the occasional action would put the
@@ -426,6 +518,13 @@ interface StudyStats {
   count: number;
   /** Timestamp of the most recent recording, or null if there are none. */
   lastRun: number | null;
+  /**
+   * Tracking ratio per recording, oldest first — the study's signal quality at a
+   * glance. It is the number that decides whether a study's results are evidence
+   * or decoration, and the only way to see it used to be to open each study in
+   * turn.
+   */
+  tracked: number[];
 }
 
 function studyCard(study: Study, stats: StudyStats): HTMLElement {
@@ -447,7 +546,15 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
 
   return el(
     "article",
-    { class: "study-card" },
+    {
+      class: "study-card",
+      // What the list head's search filters on, kept on the node so filtering is
+      // a pass over the DOM rather than a re-render that would re-decode every
+      // thumbnail on each keystroke.
+      "data-name": study.name,
+      "data-task": study.task,
+      "data-count": String(stats.count),
+    },
     thumb,
     el(
       "div",
@@ -482,6 +589,7 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
           : el("span", { class: "meta-k" }, "manual stop")
       )
     ),
+    studySignal(stats),
     el(
       "div",
       { class: "study-actions" },
@@ -548,6 +656,66 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
   );
 }
 
+/**
+ * The study's signal quality, in the track that used to be nothing.
+ *
+ * The card's third column was a measured 324px of empty cream on every row — a
+ * void the eye had to cross on its way to Run session, three or four times down
+ * the page. What belongs in it is the fact a researcher would otherwise have to
+ * open the study to learn: how well each session tracked. One bar per recording,
+ * oldest to newest, filled to the tracking ratio and coloured by the same grade
+ * the results screen paints — so a study with a run of amber bars is visible as
+ * a problem from the list, and a run improving left to right is visible as a rig
+ * that got better.
+ */
+function studySignal(stats: StudyStats): HTMLElement {
+  if (stats.tracked.length === 0) {
+    // The column keeps its heading rather than collapsing, so an empty study is
+    // recognisably the same row shape as a full one — and the line says what
+    // will appear there rather than repeating the "No recordings" already in the
+    // meta line above.
+    return el(
+      "div",
+      { class: "study-signal is-empty" },
+      el("span", { class: "label" }, "Tracked"),
+      el("span", { class: "signal-none" }, "After the first session")
+    );
+  }
+
+  // The most recent dozen. Past that the bars are hairlines and the card is a
+  // chart, which is not what a list row is for.
+  const shown = stats.tracked.slice(-12);
+  const hidden = stats.tracked.length - shown.length;
+  const percent = (ratio: number): string => `${Math.round(ratio * 100)}%`;
+
+  return el(
+    "div",
+    { class: "study-signal" },
+    el("span", { class: "label" }, "Tracked"),
+    el(
+      "div",
+      {
+        class: "signal-bars",
+        // The bars are a picture, and a picture of numbers owes a screen reader
+        // the numbers. One label for the group beats twelve tooltips no keyboard
+        // can reach.
+        role: "img",
+        "aria-label": `Tracking ratio, oldest first: ${shown.map(percent).join(", ")}`,
+      },
+      ...shown.map((ratio) => {
+        const bar = el("span", { class: "signal-bar", title: `${percent(ratio)} tracked` });
+        const fill = el("span", { class: `signal-fill signal-${gradeTracking(ratio)}` });
+        // A floor, so a 4%-tracked session is a visible mark rather than an
+        // absence that would read as "no recording here".
+        fill.style.setProperty("--v", Math.max(0.08, Math.min(1, ratio)).toFixed(3));
+        bar.append(fill);
+        return bar;
+      }),
+      hidden > 0 ? el("span", { class: "signal-more" }, `+${hidden}`) : null
+    )
+  );
+}
+
 function runSessionButton(study: Study): HTMLButtonElement {
   const btn = el(
     "button",
@@ -584,6 +752,11 @@ function openResults(study: Study): Promise<void> {
   return renderResults(app, study, () => void showStudyList(), {
     onRunSession: sessionBlockReason() ? null : () => void runSession(study),
     runBlockedReason: sessionBlockReason(),
+    // Whose calibration is cached for this sitting, if anyone's — a fact the
+    // empty results rail uses to say what the next session will actually cost.
+    // Read through the same loader the session flow uses, so the two can never
+    // disagree about whether a cached model is still valid.
+    reusableCalibration: loadStoredCalibration()?.participant ?? null,
   });
 }
 
