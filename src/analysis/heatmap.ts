@@ -32,8 +32,10 @@ export interface HeatmapOptions {
   opacity?: number;
   style?: HeatmapStyle;
   /**
-   * Clamp the intensity scale to a percentile of observed values rather than to
-   * the maximum, so one long stare does not flatten everything else to blue.
+   * Where the top of the colour ramp sits, as a percentile of the *per-blob
+   * peak* intensities — not of the pixel distribution. See {@link fieldCeiling}
+   * for why that distinction is the difference between a working clamp and a
+   * no-op.
    */
   percentile?: number;
 }
@@ -116,7 +118,7 @@ export function renderHeatmap(
   const style = options.style ?? "heat";
   const radiusRatio = options.radiusRatio ?? 0.06;
   const opacity = options.opacity ?? 0.72;
-  const percentile = options.percentile ?? 0.98;
+  const percentile = options.percentile ?? 0.9;
 
   const width = canvas.width;
   const height = canvas.height;
@@ -161,9 +163,10 @@ export function renderHeatmap(
     }
   }
 
-  // Scale to a high percentile instead of the max so a single long dwell does
-  // not compress the rest of the map into the cold end of the ramp.
-  const ceiling = fieldPercentile(field, percentile);
+  // Scale to a high percentile of the *blob peaks* rather than of the pixels,
+  // so a single long dwell does not compress the rest of the map into the cold
+  // end of the ramp. fieldCeiling explains why the pixel percentile could not.
+  const ceiling = fieldCeiling(field, width, height, radius, percentile);
   const scale = ceiling > 0 ? 255 / ceiling : 0;
 
   // Pass 2: colour the accumulated field.
@@ -233,10 +236,90 @@ export function paintField(
 }
 
 /**
+ * The top of the colour ramp, computed from one peak per blob.
+ *
+ * This used to be `fieldPercentile(field, 0.98)` — the 98th percentile of the
+ * non-zero *pixels* — and the comment above it claimed that stopped one long
+ * dwell flattening the map. It did the opposite. A dominant blob covers a small
+ * fraction of the looked-at area, so its hottest pixels sit comfortably inside
+ * the top 2% of the pixel distribution and set the ceiling themselves: the
+ * clamp landed within a few percent of the global maximum and was, in the case
+ * it was written for, a no-op. Eight clusters with one long dwell among them
+ * rendered as one red blob and seven pure-blue ones, under a legend reading
+ * "barely looked at" — a false finding, printed confidently.
+ *
+ * So reduce the field to one value per blob first: take a block maximum over
+ * cells the size of the splat radius, keep the cells that beat all eight of
+ * their neighbours, and read a high percentile off *those*. A dominant blob is
+ * then one sample among many instead of the entire top of the distribution — it
+ * saturates, and every other cluster keeps the range it earned. Interpolated
+ * rather than nearest-rank, because with eight blobs the nearest rank at p90 is
+ * still the maximum.
+ *
+ * O(n) in the field, and exported for the test suite.
+ */
+export function fieldCeiling(
+  field: Float32Array,
+  width: number,
+  height: number,
+  cell: number,
+  percentile = 0.9
+): number {
+  const size = Math.max(2, Math.round(cell));
+  const cols = Math.max(1, Math.ceil(width / size));
+  const rows = Math.max(1, Math.ceil(height / size));
+
+  const blockMax = new Float32Array(cols * rows);
+  for (let y = 0; y < height; y++) {
+    const rowBase = Math.floor(y / size) * cols;
+    const fieldBase = y * width;
+    for (let x = 0; x < width; x++) {
+      const v = field[fieldBase + x];
+      const i = rowBase + Math.floor(x / size);
+      if (v > blockMax[i]) blockMax[i] = v;
+    }
+  }
+
+  const peaks: number[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const v = blockMax[r * cols + c];
+      if (v <= 0) continue;
+      let isPeak = true;
+      for (let dr = -1; dr <= 1 && isPeak; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const rr = r + dr;
+          const cc = c + dc;
+          if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
+          if (blockMax[rr * cols + cc] > v) {
+            isPeak = false;
+            break;
+          }
+        }
+      }
+      if (isPeak) peaks.push(v);
+    }
+  }
+
+  // A field too small to have neighbourhoods, or an empty one: fall back to the
+  // pixel percentile rather than returning a ceiling of zero, which would paint
+  // the whole overlay at full intensity.
+  if (peaks.length === 0) return fieldPercentile(field, percentile);
+
+  peaks.sort((a, b) => a - b);
+  const rank = Math.max(0, Math.min(peaks.length - 1, percentile * (peaks.length - 1)));
+  const lo = Math.floor(rank);
+  const hi = Math.min(peaks.length - 1, lo + 1);
+  return peaks[lo] + (peaks[hi] - peaks[lo]) * (rank - lo);
+}
+
+/**
  * Approximate percentile of the non-zero entries of an intensity field, via a
  * 1024-bin histogram against the maximum — plenty of resolution for a display
  * ceiling, and O(n) where an exact sort of a megapixel field would not be.
- * Exported for the test suite.
+ * Kept as the degenerate-case fallback for {@link fieldCeiling}, and exported
+ * for the test suite.
  */
 export function fieldPercentile(field: Float32Array, percentile: number): number {
   const BINS = 1024;

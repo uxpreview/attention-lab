@@ -37,6 +37,15 @@ interface AnalysedRecording {
   aoiResults: AoiResult[];
 }
 
+export interface ResultsOptions {
+  /** Starts a session for this study, when this machine can run one. The
+   * results screen is a study's home, and at zero recordings it was a dead end
+   * whose only advice was to navigate somewhere else. */
+  onRunSession?: (() => void) | null;
+  /** Why a session cannot be started from here, if it cannot. */
+  runBlockedReason?: string | null;
+}
+
 /**
  * Results view: stimulus with an analysis overlay, plus the numbers behind it.
  *
@@ -49,11 +58,18 @@ interface AnalysedRecording {
 export async function renderResults(
   host: HTMLElement,
   study: Study,
-  onBack: () => void
+  onBack: () => void,
+  options: ResultsOptions = {}
 ): Promise<void> {
   clear(host);
 
   const recordings = await listRecordings(study.id);
+  /** Everything downstream of a recording — overlays, summary numbers, the
+   * per-region table, exports — is skipped when there are none. Everything
+   * upstream of one, above all the region tools, is not: a study is worth
+   * marking up before the first participant sits down, which is exactly what
+   * the study card's Results button already promises. */
+  const hasRecordings = recordings.length > 0;
   let aois: Aoi[] = [...study.aois];
   let mode: ViewMode = "heat";
   let selected: string | "all" = "all";
@@ -90,12 +106,36 @@ export async function renderResults(
   // character for character.
   const emptyLine = "No recordings yet — run a session to see attention here.";
 
+  /** The way out of an empty results screen. Prose telling someone to navigate
+   * back is not a way out; the button that does the thing is. */
+  const runAction = (): HTMLElement => {
+    if (options.onRunSession) {
+      return el(
+        "button",
+        { class: "btn btn-primary", type: "button", onclick: options.onRunSession },
+        "Run session"
+      );
+    }
+    return el(
+      "button",
+      {
+        class: "btn btn-primary",
+        type: "button",
+        disabled: true,
+        title: options.runBlockedReason ?? "Sessions need a laptop or a desktop",
+      },
+      "Run session"
+    );
+  };
+
   if (study.stimulus.kind === "image") {
     objectUrl = URL.createObjectURL(study.stimulus.blob);
     stimulusImage = el("img", { class: "results-image", src: objectUrl, alt: "" });
     stage.append(stimulusImage);
-    if (recordings.length === 0) {
-      stage.append(el("div", { class: "stage-empty" }, el("p", {}, emptyLine)));
+    if (!hasRecordings) {
+      // A card at the foot of the stage rather than an opaque sheet over it:
+      // the sheet hid the very stimulus the regions are meant to be drawn on.
+      stage.append(el("div", { class: "stage-empty" }, el("p", {}, emptyLine), runAction()));
     }
   } else {
     stage.append(
@@ -107,28 +147,85 @@ export async function renderResults(
         el(
           "p",
           { class: "muted" },
-          recordings.length === 0
-            ? `${emptyLine} Overlays are drawn against the recorded viewport, not a re-render of the page.`
-            : "Overlays are drawn against the recorded viewport, not a re-render of the page."
-        )
+          hasRecordings
+            ? "Overlays are drawn against the recorded viewport, not a re-render of the page."
+            : `${emptyLine} Overlays are drawn against the recorded viewport, not a re-render of the page.`
+        ),
+        hasRecordings ? null : el("div", { class: "placeholder-actions" }, runAction())
       )
     );
   }
   stage.append(overlay, aoiLayer);
 
   const legend = el("figure", { class: "legend-slot" });
+  // Regions and recordings live under the stage, at the width of the stage.
+  // In the 320px rail they were four ~50px columns of numbers beside a full
+  // screen-height of empty cream — the tool presenting its own findings worse
+  // than it presents the stimulus. What stays in the rail is what governs the
+  // stage: the view, who is in it, and the headline numbers for that selection.
+  const dataBlock = el("div", { class: "results-data" });
   const sidebar = el("aside", { class: "results-sidebar" });
   const layout = el(
     "div",
     { class: "results-layout" },
-    el("div", { class: "results-main" }, stage, legend),
+    el("div", { class: "results-main" }, stage, legend, dataBlock),
     sidebar
   );
 
   // Export is the whole point of a research tool, so it is a persistent
-  // toolbar action beside the recordings count rather than the last block of a
-  // sidebar — where it sat below the fold of an invisible nested scroller.
-  const exportBar = el("div", { class: "results-actions" });
+  // toolbar action rather than the last block of a sidebar — where it sat below
+  // the fold of an invisible nested scroller. One button, not five: the header
+  // read as six equivalent pills, of which the first was not a control at all.
+  const exportMenu = el("div", { class: "menu", role: "menu", hidden: true });
+  const exportToggle = el(
+    "button",
+    {
+      class: "btn btn-small",
+      type: "button",
+      "aria-haspopup": "true",
+      "aria-expanded": "false",
+      onclick: () => setExportOpen(exportMenu.hidden),
+    },
+    "Export ",
+    el("span", { class: "menu-caret", "aria-hidden": "true" }, "▾")
+  );
+  const exportBar = el("div", { class: "results-actions" }, exportToggle, exportMenu);
+
+  function exportItem(label: string, key: string, run: () => void): HTMLButtonElement {
+    return el(
+      "button",
+      {
+        class: "menu-item",
+        type: "button",
+        role: "menuitem",
+        "data-key": key,
+        onclick: () => {
+          setExportOpen(false);
+          run();
+        },
+      },
+      label
+    );
+  }
+
+  function setExportOpen(open: boolean): void {
+    exportMenu.hidden = !open;
+    exportToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    exportToggle.classList.toggle("is-active", open);
+  }
+
+  // A menu that cannot be dismissed by clicking away from it is a trap.
+  const onDocumentPointer = (event: Event) => {
+    if (!exportBar.contains(event.target as Node)) setExportOpen(false);
+  };
+  const onDocumentKey = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || exportMenu.hidden) return;
+    setExportOpen(false);
+    exportToggle.focus();
+  };
+  document.addEventListener("pointerdown", onDocumentPointer);
+  document.addEventListener("keydown", onDocumentKey);
+
   const header = el(
     "header",
     { class: "results-header" },
@@ -139,29 +236,17 @@ export async function renderResults(
       el("h1", {}, study.name),
       el(
         "span",
-        { class: "pill" },
+        { class: "pill pill-count" },
         `${recordings.length} recording${recordings.length === 1 ? "" : "s"}`
       )
     ),
-    exportBar
+    hasRecordings ? exportBar : null
   );
 
   // The results screen sits on the same measure as the experiment page around
   // it; .container is the site's shell. The bar above it keeps the wordmark and
   // the route back to the site on the deepest screen in the app.
   host.append(appBar(), el("div", { class: "container screen screen-fill" }, header, layout));
-
-  if (recordings.length === 0) {
-    sidebar.append(
-      el(
-        "div",
-        { class: "empty" },
-        el("h3", {}, "No recordings yet"),
-        el("p", { class: "muted" }, "Run a session from the study list to collect data.")
-      )
-    );
-    return;
-  }
 
   if (stimulusImage && !stimulusImage.complete) {
     const img = stimulusImage;
@@ -230,7 +315,13 @@ export async function renderResults(
     if (mode === "scanpath") {
       // A combined scanpath across participants would be meaningless, so show
       // the first selected participant's path and say so.
-      renderScanpath(overlay, set[0]?.fixations ?? [], { minRadius: 10 * dpr, maxRadius: 46 * dpr });
+      renderScanpath(overlay, set[0]?.fixations ?? [], {
+        minRadius: 10 * dpr,
+        maxRadius: 46 * dpr,
+        // The canvas is in device pixels; the ordinals have to be told, or a
+        // retina display renders them at half the size they were specified at.
+        scale: dpr,
+      });
     } else if (mode === "raw") {
       renderRawPoints(overlay, set.map((a) => a.recording));
     } else {
@@ -247,10 +338,14 @@ export async function renderResults(
     stage.classList.toggle("stage--spotlight", mode === "spotlight");
 
     // Only the scanpath's own participant is keyed, because that is the only
-    // one on the stage.
+    // one on the stage. With nothing on the stage there is nothing to key: a
+    // legend for an overlay that is not drawn is a caption for a missing
+    // figure.
     const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
     clear(legend);
-    legend.append(legendElement(mode, keyed.map((a) => a.recording.participant)));
+    if (hasRecordings) {
+      legend.append(legendElement(mode, keyed.map((a) => a.recording.participant)));
+    }
 
     renderAoiBoxes(aoiLayer, aois, onAoiChange);
   };
@@ -264,7 +359,7 @@ export async function renderResults(
     persistAois();
     analysed = analyse();
     void draw();
-    renderSidebar();
+    renderData();
   };
 
   // --- AOI drawing -------------------------------------------------------
@@ -325,17 +420,45 @@ export async function renderResults(
     aoiLayer.addEventListener("pointercancel", onUp);
   });
 
-  // --- Sidebar -----------------------------------------------------------
+  // --- Sidebar and data blocks -------------------------------------------
+
+  /**
+   * Rebuilds a container's contents, handing keyboard focus back afterwards.
+   * Rebuilding destroys whatever control held focus, which would drop it to
+   * <body> and force a Tab journey from the top after every interaction.
+   * Controls carry a data-key so focus can find its rebuilt equivalent.
+   */
+  function rebuild(container: HTMLElement, build: () => void): void {
+    const active = document.activeElement as HTMLElement | null;
+    const focusKey = active && container.contains(active) ? active.dataset.key : undefined;
+    clear(container);
+    build();
+    if (focusKey) container.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
+  }
 
   function renderSidebar(): void {
-    // Rebuilding destroys whatever control held keyboard focus, which would
-    // drop focus to <body> and force a Tab journey from the top after every
-    // interaction. Controls carry a data-key so focus can be handed back to
-    // the rebuilt equivalent.
-    const active = document.activeElement as HTMLElement | null;
-    const focusKey = active && sidebar.contains(active) ? active.dataset.key : undefined;
+    rebuild(sidebar, buildSidebar);
+  }
 
-    clear(sidebar);
+  function renderData(): void {
+    rebuild(dataBlock, () => {
+      dataBlock.append(aoiSection());
+      if (hasRecordings) dataBlock.append(recordingsSection());
+    });
+  }
+
+  function buildSidebar(): void {
+    if (!hasRecordings) {
+      sidebar.append(
+        el("h3", {}, "View"),
+        el(
+          "p",
+          { class: "muted" },
+          "Heatmap, spotlight, contour and scanpath views arrive with the first recording. Regions drawn now apply to every session run afterwards."
+        )
+      );
+      return;
+    }
 
     sidebar.append(
       el("h3", {}, "View"),
@@ -354,6 +477,7 @@ export async function renderResults(
                 mode = value;
                 void draw();
                 renderSidebar();
+                renderData();
               },
             },
             OVERLAY_LABELS[value]
@@ -372,6 +496,7 @@ export async function renderResults(
           selected = (event.target as HTMLSelectElement).value;
           void draw();
           renderSidebar();
+          renderData();
         },
       },
       el("option", { value: "all" }, `All participants (${activeSet().length})`),
@@ -404,6 +529,7 @@ export async function renderResults(
           includeLowSignal = (event.target as HTMLInputElement).checked;
           void draw();
           renderSidebar();
+          renderData();
         },
       });
       sidebar.append(
@@ -472,39 +598,50 @@ export async function renderResults(
       );
     }
 
-    // AOIs
-    const aoiHeader = el(
-      "div",
-      { class: "row-between" },
-      el("h3", {}, "Areas of interest"),
+  }
+
+  /** Regions and their numbers, under the stage where there is room for them
+   * to be a table rather than four 50px columns squeezed into a rail. */
+  function aoiSection(): HTMLElement {
+    const section = el(
+      "section",
+      { class: "results-block" },
       el(
-        "button",
-        {
-          class: `btn btn-small ${drawingAoi ? "is-active" : ""}`,
-          type: "button",
-          "aria-pressed": drawingAoi ? "true" : "false",
-          "data-key": "aoi-draw",
-          onclick: () => {
-            drawingAoi = !drawingAoi;
-            aoiLayer.classList.toggle("is-drawing", drawingAoi);
-            renderSidebar();
+        "div",
+        { class: "row-between" },
+        el("h3", {}, "Areas of interest"),
+        el(
+          "button",
+          {
+            class: `btn btn-small ${drawingAoi ? "is-active" : ""}`,
+            type: "button",
+            "aria-pressed": drawingAoi ? "true" : "false",
+            "data-key": "aoi-draw",
+            onclick: () => {
+              drawingAoi = !drawingAoi;
+              aoiLayer.classList.toggle("is-drawing", drawingAoi);
+              renderData();
+            },
           },
-        },
-        drawingAoi ? "Cancel" : "+ Draw"
+          drawingAoi ? "Cancel" : "+ Draw"
+        )
       )
     );
-    sidebar.append(aoiHeader);
 
     if (aois.length === 0) {
-      sidebar.append(
+      section.append(
         el("p", { class: "muted" }, "Draw a box over the stimulus to measure attention on it.")
       );
-    } else {
-      const aggregates = aggregateAois(
-        aois,
-        set.map((a) => a.aoiResults)
-      );
-      const table = el(
+      return section;
+    }
+
+    const aggregates = aggregateAois(
+      aois,
+      activeSet().map((a) => a.aoiResults)
+    );
+
+    section.append(
+      el(
         "table",
         { class: "data-table" },
         el(
@@ -514,9 +651,15 @@ export async function renderResults(
             "tr",
             {},
             el("th", {}, "Region"),
-            el("th", {}, "Seen"),
-            el("th", {}, "Dwell"),
-            el("th", {}, "TTFF")
+            // Without recordings these columns would be four columns of zeroes
+            // presented as measurements.
+            hasRecordings ? el("th", {}, "Seen") : null,
+            hasRecordings ? el("th", {}, "Dwell") : null,
+            // An acronym nobody outside the field reads on sight, in a tool
+            // whose whole claim is that it explains its own numbers.
+            hasRecordings
+              ? el("th", {}, el("abbr", { title: "Time to first fixation" }, "TTFF"))
+              : null
           )
         ),
         el(
@@ -537,7 +680,7 @@ export async function renderResults(
               },
               el(
                 "td",
-                {},
+                { class: "cell-name" },
                 el("input", {
                   class: "inline-input",
                   value: agg.label,
@@ -556,22 +699,30 @@ export async function renderResults(
                   },
                 })
               ),
-              el("td", {}, formatPercent(agg.hitRate)),
-              el("td", {}, formatMs(agg.meanDwell)),
-              el(
-                "td",
-                {},
-                agg.meanTimeToFirstFixation === null ? "—" : formatMs(agg.meanTimeToFirstFixation)
-              )
+              hasRecordings ? el("td", {}, formatPercent(agg.hitRate)) : null,
+              hasRecordings ? el("td", {}, formatMs(agg.meanDwell)) : null,
+              hasRecordings
+                ? el(
+                    "td",
+                    {},
+                    agg.meanTimeToFirstFixation === null
+                      ? "—"
+                      : formatMs(agg.meanTimeToFirstFixation)
+                  )
+                : null
             )
           )
         )
-      );
-      sidebar.append(table);
-    }
+      )
+    );
+    return section;
+  }
 
-    // Per-recording management
-    sidebar.append(
+  function recordingsSection(): HTMLElement {
+    const excluding = excludingLowSignal();
+    return el(
+      "section",
+      { class: "results-block" },
       el("h3", {}, "Recordings"),
       el(
         "ul",
@@ -601,10 +752,20 @@ export async function renderResults(
                     )
                   : null
               ),
+              // Only the tracked percentage is a judgement. A fixation count is
+              // a neutral descriptor, and painting it success-green spent the
+              // palette's one "this is fine" signal on it five rows running —
+              // which is what drained the meaning from the green on "Tracking
+              // ratio 90%" in the summary above.
               el(
                 "span",
-                { class: `recording-stats signal-${grade}` },
-                `${a.fixations.length} fixations · ${formatPercent(a.recording.quality.trackingRatio)} tracked`
+                { class: "recording-stats" },
+                `${a.fixations.length} fixations · `,
+                el(
+                  "span",
+                  { class: `signal-${grade}` },
+                  `${formatPercent(a.recording.quality.trackingRatio)} tracked`
+                )
               )
             ),
             recordingDeleteButton(a.recording)
@@ -612,10 +773,6 @@ export async function renderResults(
         })
       )
     );
-
-    if (focusKey) {
-      sidebar.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
-    }
   }
 
   function recordingDeleteButton(recording: Recording): HTMLButtonElement {
@@ -630,6 +787,7 @@ export async function renderResults(
       if (selected === recording.id) selected = "all";
       void draw();
       renderSidebar();
+      renderData();
     });
     btn.setAttribute("aria-label", `Delete ${recording.participant}'s recording`);
     btn.dataset.key = `delete-${recording.id}`;
@@ -643,11 +801,10 @@ export async function renderResults(
       ?.classList.toggle("is-linked", on);
   }
 
-  // The toolbar is built once: every handler reads `mode`, `selected`,
+  // The menu is built once: every handler reads `mode`, `selected`,
   // `analysed` and `aois` when it fires, so it never goes stale.
-  exportBar.append(
-    el("span", { class: "label results-actions-label" }, "Export"),
-    exportButton("PNG overlay", "export-png", () => {
+  exportMenu.append(
+    exportItem("PNG overlay", "export-png", () => {
       const set = activeSet();
       const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
       void exportOverlayPng(study, stimulusImage, overlay, {
@@ -661,14 +818,14 @@ export async function renderResults(
             : (keyed[0]?.recording.participant ?? "All participants"),
       });
     }),
-    exportButton("Fixations CSV", "export-fixations", () =>
+    exportItem("Fixations CSV", "export-fixations", () =>
       exportFixationsCsv(
         study,
         analysed.map((a) => ({ participant: a.recording.participant, fixations: a.fixations }))
       )
     ),
-    exportButton("Raw CSV", "export-raw", () => exportRawCsv(study, recordings)),
-    exportButton("AOI CSV", "export-aoi", () =>
+    exportItem("Raw CSV", "export-raw", () => exportRawCsv(study, recordings)),
+    exportItem("AOI CSV", "export-aoi", () =>
       exportAoiCsv(
         study,
         aggregateAois(
@@ -678,10 +835,11 @@ export async function renderResults(
         analysed.map((a) => ({ participant: a.recording.participant, results: a.aoiResults }))
       )
     ),
-    exportButton("Session JSON", "export-json", () => exportStudyJson(study, recordings))
+    exportItem("Session JSON", "export-json", () => exportStudyJson(study, recordings))
   );
 
   renderSidebar();
+  renderData();
   await draw();
 
   // Live resizes fire many events per second, and each full redraw re-splats
@@ -698,16 +856,14 @@ export async function renderResults(
   const observer = new MutationObserver(() => {
     if (!host.isConnected || !stage.isConnected) {
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("pointerdown", onDocumentPointer);
+      document.removeEventListener("keydown", onDocumentKey);
       window.clearTimeout(resizeTimer);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       observer.disconnect();
     }
   });
   observer.observe(host, { childList: true });
-}
-
-function exportButton(label: string, key: string, onclick: () => void): HTMLButtonElement {
-  return el("button", { class: "btn btn-small", type: "button", "data-key": key, onclick }, label);
 }
 
 function statRow(label: string, value: string, grade?: QualityGrade): HTMLElement {

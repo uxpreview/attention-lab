@@ -510,6 +510,9 @@ function scanpathFigure(width: number, height: number): Raster {
   renderScanpath(canvas, analyse(width, height, 0), {
     minRadius: 10 * scale,
     maxRadius: 40 * scale,
+    // Same contract as the results screen: the ordinal size bounds are in CSS
+    // pixels, so a canvas drawn at another scale has to say so.
+    scale,
   });
   page.overlay(raster.data);
   return page;

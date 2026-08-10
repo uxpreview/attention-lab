@@ -10,7 +10,13 @@
  */
 
 import { detectFixations, summarise } from "../analysis/fixations";
-import { contourBandColours, fieldPercentile, paintField, rampColour } from "../analysis/heatmap";
+import {
+  contourBandColours,
+  fieldCeiling,
+  fieldPercentile,
+  paintField,
+  rampColour,
+} from "../analysis/heatmap";
 import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
 import { layoutOrdinals, type OrdinalLabel } from "../analysis/scanpath";
@@ -527,6 +533,83 @@ section("Heatmap percentile ceiling");
   check("finds a high percentile of a uniform ramp", Math.abs(p98 - 98) < 1, `${p98.toFixed(1)}`);
   check("zeroes are excluded from the distribution", fieldPercentile(Float32Array.of(0, 0, 0, 8), 0.5) > 7);
   check("an empty field yields a zero ceiling", fieldPercentile(new Float32Array(16), 0.98) === 0);
+}
+
+// --- The display ceiling -------------------------------------------------
+
+section("Heatmap display ceiling");
+{
+  // Eight clusters in a row, one of them five times the rest: the seeded-study
+  // case that rendered as a single red blob and seven pure-blue ones under a
+  // legend reading "barely looked at". The old ceiling was a percentile of the
+  // non-zero *pixels*, which the dominant blob sets by itself.
+  const W = 400;
+  const H = 40;
+  const radius = 16;
+  const sigmaSq = 2 * (radius / 2) * (radius / 2);
+  const field = new Float32Array(W * H);
+  const weights = [5, 1, 1, 1, 1, 1, 1, 1];
+  weights.forEach((weight, i) => {
+    const cx = 25 + i * 50;
+    const cy = 20;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+        if (d2 > radius * radius) continue;
+        field[y * W + x] += weight * Math.exp(-d2 / sigmaSq);
+      }
+    }
+  });
+
+  let max = 0;
+  for (let i = 0; i < field.length; i++) max = Math.max(max, field[i]);
+  const secondary = max / 5;
+
+  const pixelP98 = fieldPercentile(field, 0.98);
+  const ceiling = fieldCeiling(field, W, H, radius, 0.9);
+
+  // The old clamp: it lands so close to the dominant peak that every other
+  // cluster is pushed into the bottom third of the ramp — the cold end the
+  // legend labels "barely looked at".
+  check(
+    "the old pixel percentile barely clamped the dominant blob",
+    pixelP98 > max * 0.6,
+    `${((pixelP98 / max) * 100).toFixed(0)}% of the peak`
+  );
+  check(
+    "the old pixel percentile froze the other clusters out",
+    secondary / pixelP98 < 0.3,
+    `${((secondary / pixelP98) * 100).toFixed(0)}% of the old ceiling`
+  );
+  check(
+    "the blob ceiling sits below the dominant peak",
+    ceiling < max * 0.7,
+    `${((ceiling / max) * 100).toFixed(0)}% of the peak`
+  );
+  check(
+    "the dominant blob still saturates the ramp",
+    max / ceiling >= 1,
+    `${(max / ceiling).toFixed(2)}x the ceiling`
+  );
+  check(
+    "the other clusters reach the warm half of the ramp",
+    secondary / ceiling > 0.4,
+    `${((secondary / ceiling) * 100).toFixed(0)}% of the ceiling`
+  );
+
+  // One cluster on its own has no other blob to be measured against, and its
+  // own peak is the only honest ceiling there is.
+  const lone = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const d2 = (x - 200) * (x - 200) + (y - 20) * (y - 20);
+      if (d2 <= radius * radius) lone[y * W + x] = Math.exp(-d2 / sigmaSq);
+    }
+  }
+  const loneCeiling = fieldCeiling(lone, W, H, radius, 0.9);
+  check("a single cluster still scales to its own peak", Math.abs(loneCeiling - 1) < 0.01, `${loneCeiling.toFixed(3)}`);
+
+  check("an empty field yields a zero ceiling", fieldCeiling(new Float32Array(64), 8, 8, 4) === 0);
 }
 
 // --- Overlay painting ----------------------------------------------------

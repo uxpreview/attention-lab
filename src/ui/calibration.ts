@@ -1,6 +1,6 @@
 import { ERROR_BAD_DEG, ERROR_GOOD_DEG, pxToDegrees } from "../analysis/quality";
 import type { CalibrationSample, GazeEngine } from "../tracker/gaze";
-import { el, inertSiblings, sleep } from "./dom";
+import { confirmButton, el, inertSiblings, sleep } from "./dom";
 
 /**
  * Calibration and validation flow.
@@ -110,10 +110,22 @@ export async function runCalibration(
   const heading = el("h2", {}, "Calibration");
   const guidance = el(
     "p",
-    {},
+    { class: "calib-guidance" },
     "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until the ring around it completes. Esc cancels."
   );
-  const instruction = el("div", { class: "calib-instruction" }, heading, guidance);
+  // What survives the dimming. The full block used to go to opacity 0 after the
+  // first dot, leaving seventeen more clicks with no statement of the one rule
+  // that decides whether the calibration is worth anything — and the rule is
+  // not guessable: a participant who lets go on the click gives every point
+  // zero usable dwell, and nothing downstream looks wrong. Dimmed, the block
+  // keeps this line and moves out of the middle of the screen, where the
+  // centre dot is.
+  const shortGuidance = el(
+    "p",
+    { class: "calib-short" },
+    "Click the dot, then keep looking at it until the ring fills. Esc cancels."
+  );
+  const instruction = el("div", { class: "calib-instruction" }, heading, guidance, shortGuidance);
   // The counter lives outside the instruction block: the instructions dim
   // after the first dot, and progress is the one thing that has to stay
   // visible for all eighteen clicks — it is what buys participant patience.
@@ -123,10 +135,15 @@ export async function runCalibration(
     { class: "calib-dot", type: "button", "aria-label": "Calibration point" },
     calibrationRing()
   );
-  const cancelBtn = el(
-    "button",
-    { class: "btn btn-ghost btn-small calib-cancel", type: "button" },
-    "Cancel"
+  // Two-step, like every other destructive control in the app: this one throws
+  // away up to thirty seconds of a participant's work with no undo, and it
+  // shares a corner with the dots. It also gets out of the way entirely when a
+  // dot lands near it — see keepCancelClear.
+  const cancelBtn = confirmButton(
+    "Cancel",
+    "Stop calibration?",
+    () => cancel(),
+    "btn btn-ghost btn-small calib-cancel"
   );
   overlay.append(instruction, progress, dot, cancelBtn);
   host.append(overlay);
@@ -139,7 +156,8 @@ export async function runCalibration(
 
   // One cancellation path for the Escape key and the on-screen button: both
   // abort whatever wait is in flight, and the loops check the flag between
-  // points.
+  // points. Escape fires immediately — a deliberate keystroke is already the
+  // second step — while the button arms first (see cancelBtn above).
   const abort = new AbortController();
   const cancel = () => {
     cancelled = true;
@@ -149,13 +167,15 @@ export async function runCalibration(
     if (event.key === "Escape") cancel();
   };
   window.addEventListener("keydown", onKey);
-  cancelBtn.addEventListener("click", cancel);
 
   try {
     for (let i = 0; i < CALIBRATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = CALIBRATION_POINTS[i];
-      progress.textContent = `${i + 1} / ${CALIBRATION_POINTS.length}`;
+      // Phase-labelled, because an unlabelled counter restarting at "1 / 5"
+      // after thirteen dots reads as the whole thing starting over.
+      progress.textContent = `Calibration ${i + 1} / ${CALIBRATION_POINTS.length}`;
+      keepCancelClear(cancelBtn, nx, ny);
       let collected: CollectResult;
       do {
         collected = await collectAtPoint(engine, dot, nx, ny, samples, abort.signal);
@@ -164,8 +184,10 @@ export async function runCalibration(
         cancelled = true;
         break;
       }
-      // Hide the instruction panel after the first point so it stops competing
-      // for attention with the dot the participant is meant to be looking at.
+      // Dim the instruction panel after the first point so it stops competing
+      // for attention with the dot — down to one line, moved out of the centre
+      // of the screen. It used to go to opacity 0, which took the only
+      // statement of the rule that decides whether any of this is usable.
       if (i === 0) instruction.classList.add("is-dim");
     }
 
@@ -177,13 +199,14 @@ export async function runCalibration(
     instruction.classList.remove("is-dim");
     heading.textContent = "Accuracy check";
     guidance.textContent =
-      "Five more dots. Same again — click, then hold until the ring completes. These measure how accurate the calibration actually is.";
+      "Five more dots — the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
 
     const pointErrors: number[] = [];
     for (let i = 0; i < VALIDATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = VALIDATION_POINTS[i];
-      progress.textContent = `${i + 1} / ${VALIDATION_POINTS.length}`;
+      progress.textContent = `Accuracy check ${i + 1} / ${VALIDATION_POINTS.length}`;
+      keepCancelClear(cancelBtn, nx, ny);
       let error: number | "retry" | null;
       do {
         error = await measureAtPoint(engine, dot, nx, ny, abort.signal);
@@ -208,6 +231,29 @@ export async function runCalibration(
     restoreBackground();
     overlay.remove();
   }
+}
+
+/** Clearance kept between a calibration dot and the Cancel button, in pixels. */
+const CANCEL_CLEARANCE = 120;
+
+/**
+ * Gets Cancel out of the way of the dot.
+ *
+ * Cancel is in the bottom-left corner, which no calibration or validation point
+ * occupies — but the corner points still come within a dot's halo of it at some
+ * viewport sizes, and the two nearest, [0.08, 0.92] and [0.2, 0.8], are the ones
+ * a participant aims at hardest. A 10px overshoot landing on Cancel used to
+ * abort the whole calibration on a single click. Now the button both arms
+ * before it fires and vanishes while a dot is anywhere near it; Esc stays
+ * available throughout and the dimmed instruction line keeps saying so.
+ */
+function keepCancelClear(cancelBtn: HTMLElement, nx: number, ny: number): void {
+  const x = nx * window.innerWidth;
+  const y = ny * window.innerHeight;
+  const rect = cancelBtn.getBoundingClientRect();
+  const dx = Math.max(rect.left - x, 0, x - rect.right);
+  const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+  cancelBtn.classList.toggle("is-away", Math.hypot(dx, dy) < CANCEL_CLEARANCE);
 }
 
 function placeDot(dot: HTMLElement, nx: number, ny: number): { x: number; y: number } {

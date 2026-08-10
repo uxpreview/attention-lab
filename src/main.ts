@@ -4,7 +4,7 @@ import { deleteStudy, listRecordings, listStudies, newId, saveStudy } from "./da
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
 import { FEATURE_BASIS_VERSION, FEATURE_DIM } from "./tracker/features";
-import { GazeEngine } from "./tracker/gaze";
+import { GazeEngine, type TrackerStatus } from "./tracker/gaze";
 import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/regression";
 import { describeAccuracy, runCalibration } from "./ui/calibration";
 import { appBar, LAB_URL } from "./ui/chrome";
@@ -112,6 +112,30 @@ function isHandheld(): boolean {
   );
 }
 
+/** The smallest window a session can honestly run in. Calibration puts points
+ * at 6% and 94% of each axis, which below this lands them within a couple of
+ * dozen pixels of the window edge — close enough that a participant's gaze
+ * leaves the screen rather than reaching the dot — and a 1280px stimulus has
+ * nowhere to be read at. */
+const MIN_SESSION_EDGE = 700;
+
+/**
+ * Why a session cannot run here, or null if it can.
+ *
+ * The handheld notice was pointer-based only: it wanted `(pointer: coarse)`
+ * AND a small screen, so a 390px-wide *desktop* window sailed straight past it
+ * with the full flow armed — as did a tablet with a trackpad. The honesty of
+ * the notice is worth nothing if resizing a window defeats it, so the size
+ * guard now stands on its own, independent of what kind of pointer is driving.
+ */
+function sessionBlockReason(): string | null {
+  if (isHandheld()) return "Sessions need a laptop or a desktop";
+  if (Math.min(window.innerWidth, window.innerHeight) < MIN_SESSION_EDGE) {
+    return `This window is too small to calibrate in — make it at least ${MIN_SESSION_EDGE}px in both directions`;
+  }
+  return null;
+}
+
 function experimentHead(): HTMLElement {
   // The bar is shared with the session and results screens, which used to drop
   // the chrome entirely — see ui/chrome.ts.
@@ -141,10 +165,15 @@ function experimentHead(): HTMLElement {
       { class: "container exp-head" },
       meta,
       el("h1", { class: "t-h1" }, "Attention Lab", el("span", { class: "dot" }, ".")),
+      // Two sentences, not six. This is a tool people open to run a session,
+      // and the lede used to push every control below a 900px fold — the page
+      // read as an essay with a tool bolted underneath. The accuracy caveat
+      // that used to close it is stated where it actually binds a decision:
+      // the calibration readout, and the first bench note.
       el(
         "p",
         { class: "t-lede" },
-        "Point a webcam at a wireframe and find out where people actually look. Upload a screen, give someone a task, and this rebuilds their gaze from the iris after thirteen calibration clicks, then hands back a heatmap, a scanpath, and attention numbers per region. Accurate to a block rather than a word, which is the honest limit of doing this without a lab rig, and enough to settle most arguments about hierarchy."
+        "Point a webcam at a wireframe and find out where people actually look. Upload a screen, set a task, and get back a heatmap, a scanpath, and attention numbers per region — accurate to a block rather than a word."
       )
     )
   );
@@ -323,6 +352,10 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
       { class: "study-body" },
       el("h3", {}, study.name),
       el("p", { class: "muted" }, study.task || "No task set"),
+      // The label voice belongs on the static fragments, never on the data. The
+      // whole line used to be uppercased, which printed a case-sensitive URL as
+      // "HTTPS://EXAMPLE.COM/" — factually wrong, not just loud — and turned
+      // "15s" into the non-unit "15S".
       el(
         "p",
         { class: "study-meta" },
@@ -333,47 +366,39 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
             ? `${stats.count} recording${stats.count === 1 ? "" : "s"}`
             : "No recordings"
         ),
-        stats.lastRun === null ? null : ` · last run ${relativeDay(stats.lastRun)}`,
+        stats.lastRun === null ? null : " · ",
+        stats.lastRun === null ? null : el("span", { class: "meta-k" }, "last run "),
+        stats.lastRun === null ? null : relativeDay(stats.lastRun),
         " · ",
         study.stimulus.kind === "image"
-          ? `${study.stimulus.width}×${study.stimulus.height} image`
-          : study.stimulus.url,
+          ? `${study.stimulus.width}×${study.stimulus.height}`
+          : el("span", { class: "meta-url" }, study.stimulus.url),
+        study.stimulus.kind === "image" ? el("span", { class: "meta-k" }, " image") : null,
         " · ",
-        study.duration > 0 ? `${study.duration}s` : "manual stop"
+        study.duration > 0
+          ? `${study.duration}s`
+          : el("span", { class: "meta-k" }, "manual stop")
       )
     ),
     el(
       "div",
       { class: "study-actions" },
-      // On a handheld the run button is disabled rather than hidden: a control
-      // that vanishes leaves you wondering whether the tool is broken, and the
-      // notice above the list has already given the reason.
-      isHandheld()
-        ? el(
-            "button",
-            {
-              class: "btn btn-primary",
-              type: "button",
-              disabled: true,
-              title: "Sessions need a laptop or a desktop",
-            },
-            "Run session"
-          )
-        : el(
-            "button",
-            { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
-            "Run session"
-          ),
+      // Where a session cannot run the button is disabled rather than hidden: a
+      // control that vanishes leaves you wondering whether the tool is broken,
+      // and the title says which of the two reasons applies.
+      runSessionButton(study),
       // Softened rather than disabled at zero: there is nothing to read yet,
       // but the results screen is also where regions are drawn, and a study
-      // can usefully be marked up before the first participant sits down.
+      // can usefully be marked up before the first participant sits down — the
+      // screen keeps its region tools at zero recordings, so the tooltip is a
+      // promise the app now actually honours.
       el(
         "button",
         {
           class: stats.count > 0 ? "btn" : "btn btn-ghost",
           type: "button",
           title: stats.count > 0 ? null : "No recordings yet — regions can still be drawn",
-          onclick: () => void renderResults(app, study, () => void showStudyList()),
+          onclick: () => void openResults(study),
         },
         "Results"
       ),
@@ -394,6 +419,31 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
       studyDeleteButton(study)
     )
   );
+}
+
+function runSessionButton(study: Study): HTMLButtonElement {
+  const blocked = sessionBlockReason();
+  if (blocked) {
+    return el(
+      "button",
+      { class: "btn btn-primary", type: "button", disabled: true, title: blocked },
+      "Run session"
+    );
+  }
+  return el(
+    "button",
+    { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
+    "Run session"
+  );
+}
+
+/** Results, with the route back and — when this machine can run one — the way
+ * on to a session, so a study with no data yet is not a dead end. */
+function openResults(study: Study): Promise<void> {
+  return renderResults(app, study, () => void showStudyList(), {
+    onRunSession: sessionBlockReason() ? null : () => void runSession(study),
+    runBlockedReason: sessionBlockReason(),
+  });
 }
 
 function studyDeleteButton(study: Study): HTMLButtonElement {
@@ -427,11 +477,22 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     value: existing?.stimulus.kind === "url" ? existing.stimulus.url : "",
   });
   const durationInput = el("input", {
-    class: "input",
+    class: "input input-with-suffix",
     type: "number",
     value: existing ? String(existing.duration) : "15",
     min: "0",
+    "aria-describedby": "duration-hint",
   });
+  // "Duration (seconds, 0 = manual)" wrapped to two lines at 12px uppercase and
+  // shoved its input out of alignment with everything else: a parenthetical
+  // spec crammed into a label slot. The unit belongs in the field, and the
+  // special case belongs under it.
+  const durationField = el(
+    "div",
+    { class: "input-suffix" },
+    durationInput,
+    el("span", { class: "input-suffix-unit", "aria-hidden": "true" }, "sec")
+  );
   const fileInput = el("input", { class: "file-input", type: "file", accept: "image/*" });
 
   const dropTitle = el("span", { class: "drop-title" }, "Drop a wireframe or screenshot");
@@ -470,19 +531,51 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     if (dropped && dropped.type.startsWith("image/")) setFile(dropped);
   });
 
-  const error = el("p", { class: "error" });
+  // role="alert" so it is heard rather than only seen, and an id so the field
+  // at fault can point at it. It sat two fields away from the input it
+  // described, in a three-column grid, with nothing marking which of four
+  // inputs was wrong.
+  const error = el("p", { class: "error", id: "setup-error", role: "alert" });
+
+  /** Names the field at fault, marks it, moves the cursor to it, and says why.
+   * Everything a validation failure owes the person who hit it. */
+  const fail = (input: HTMLInputElement | null, message: string): void => {
+    error.textContent = message;
+    if (!input) return;
+    input.classList.add("is-invalid");
+    input.setAttribute("aria-invalid", "true");
+    input.setAttribute("aria-describedby", "setup-error");
+    input.focus();
+  };
+
+  const clearInvalid = (): void => {
+    error.textContent = "";
+    for (const input of [nameInput, urlInput, durationInput]) {
+      input.classList.remove("is-invalid");
+      input.removeAttribute("aria-invalid");
+      if (input !== durationInput) input.removeAttribute("aria-describedby");
+    }
+  };
+
+  // Typing is the operator answering the complaint; the mark comes off then
+  // rather than surviving until the next submit.
+  for (const input of [nameInput, urlInput]) {
+    input.addEventListener("input", () => {
+      if (input.classList.contains("is-invalid")) clearInvalid();
+    });
+  }
 
   const submit = async () => {
-    error.textContent = "";
+    clearInvalid();
     const name = nameInput.value.trim();
     const url = urlInput.value.trim();
 
     if (!name) {
-      error.textContent = "Give the study a name.";
+      fail(nameInput, "Give the study a name.");
       return;
     }
     if (!existing && !file && !url) {
-      error.textContent = "Add an image or a URL to look at.";
+      fail(urlInput, "Add an image or a URL to look at.");
       return;
     }
 
@@ -500,12 +593,12 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
       };
     } else {
       if (!url) {
-        error.textContent = "Add a URL to look at.";
+        fail(urlInput, "Add a URL to look at.");
         return;
       }
       const resolved = normaliseStimulusUrl(url);
       if ("problem" in resolved) {
-        error.textContent = resolved.problem;
+        fail(urlInput, resolved.problem);
         return;
       }
       stimulus = { kind: "url", url: resolved.url };
@@ -560,13 +653,20 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     "div",
     { class: "setup-controls" },
     existing ? null : dropZone,
+    // Two columns rather than auto-fit's three: at three, Duration was left
+    // alone on a row of its own with two thirds of it empty directly above the
+    // submit button. Paired with the URL field, the grid closes.
     el(
       "div",
       { class: "field-grid" },
       field("Study name", nameInput),
       field("Task prompt", taskInput),
       lockedImage ? null : field(existing ? "Page URL" : "Or a page URL", urlInput),
-      field("Duration (seconds, 0 = manual)", durationInput)
+      field(
+        "Duration",
+        durationField,
+        el("span", { class: "field-hint", id: "duration-hint" }, "0 = until the moderator stops")
+      )
     ),
     error,
     el(
@@ -601,8 +701,8 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
   return form;
 }
 
-function field(label: string, input: HTMLElement): HTMLElement {
-  return el("label", { class: "field" }, el("span", {}, label), input);
+function field(label: string, input: HTMLElement, hint?: HTMLElement): HTMLElement {
+  return el("label", { class: "field" }, el("span", {}, label), input, hint ?? null);
 }
 
 
@@ -716,8 +816,74 @@ async function runSession(study: Study): Promise<void> {
 
   // role="status" makes this a polite live region: the camera states below are
   // exactly what a non-sighted operator needs to hear to know it is working.
-  const status = el("p", { class: "muted", role: "status" }, "Starting camera…");
-  const preview = el("div", { class: "camera-preview" }, engine.tracker.video);
+  const status = el("p", { class: "muted session-status", role: "status" }, "Starting camera…");
+
+  /**
+   * The one place the status line is written.
+   *
+   * Two things used to go wrong here. The severity was invisible — "No face
+   * detected. Check your lighting and framing." rendered in exactly the same
+   * grey at the same size as "Ready to calibrate.", so the one blocking state
+   * in the flow looked like the ready state. And the tracker listener kept a
+   * `lastMessage` closure to avoid rewriting the live region every frame, while
+   * other code paths wrote `status.textContent` directly and never told it: a
+   * cancelled calibration left "Calibration cancelled." on screen permanently,
+   * because the face state had not transitioned since. Both are fixed by
+   * giving the line a single owner, and by keeping the outcome of the last
+   * attempt out of it entirely (see setOutcome).
+   */
+  let lastStatusMessage = "";
+  const setStatus = (message: string, tone: "info" | "ok" | "warn" | "bad" = "info"): void => {
+    lastStatusMessage = message;
+    status.textContent = message;
+    status.classList.toggle("is-ok", tone === "ok");
+    status.classList.toggle("is-warn", tone === "warn");
+    status.classList.toggle("error", tone === "bad");
+  };
+
+  /**
+   * What happened last time, which is a different kind of fact from what the
+   * camera is doing now.
+   *
+   * These used to be written over the live status line, which put the two in
+   * direct conflict: either the outcome was wiped by the next tracked frame, or
+   * — as shipped — the line stopped updating and reported a cancelled
+   * calibration for as long as the operator stood there, at exactly the moment
+   * they were deciding whether the rig was working. They are separate lines
+   * now, and each says only what it knows.
+   */
+  const outcomeLine = el("p", { class: "note session-outcome", role: "status", hidden: true });
+  const setOutcome = (message: string, tone: "warn" | "bad" = "warn"): void => {
+    outcomeLine.textContent = message;
+    outcomeLine.classList.toggle("note-warn", tone === "warn");
+    outcomeLine.classList.toggle("note-bad", tone === "bad");
+    outcomeLine.hidden = false;
+  };
+  const clearOutcome = (): void => {
+    outcomeLine.hidden = true;
+    outcomeLine.textContent = "";
+  };
+
+  // Something to aim at. The preview is the largest element on the screen and
+  // offered no guidance at all: no head-position guide, no distance cue, and
+  // the only feedback a grey sentence underneath it. The oval takes the
+  // face-detected state, so a participant can fix their own framing.
+  const guide = el(
+    "div",
+    { class: "camera-guide", "aria-hidden": "true" },
+    el("span", { class: "camera-guide-oval" }),
+    el("span", { class: "camera-guide-hint" }, "Line your face up here")
+  );
+  const preview = el("div", { class: "camera-preview" }, engine.tracker.video, guide);
+  // Said on the screen where the camera light is actually on, which is when a
+  // participant asks. It was on the setup panel and in the bench notes —
+  // everywhere except here.
+  const privacyNote = el(
+    "p",
+    { class: "privacy-note" },
+    el("span", { class: "lock-glyph", "aria-hidden": "true" }),
+    "Nothing leaves this machine. The camera is read frame by frame in this page; no video is recorded, uploaded, or sent anywhere."
+  );
   const stored = loadStoredCalibration();
 
   const participantInput = el("input", {
@@ -735,6 +901,7 @@ async function runSession(study: Study): Promise<void> {
     el("p", { class: "muted" }, study.task || "No task set"),
     stimulusCheck(study),
     preview,
+    privacyNote,
     status,
     field("Participant label", participantInput),
     el(
@@ -743,6 +910,7 @@ async function runSession(study: Study): Promise<void> {
       gazeDotToggle,
       el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
     ),
+    outcomeLine,
     actions
   );
 
@@ -769,10 +937,10 @@ async function runSession(study: Study): Promise<void> {
   // the address is still unloadable, running the session would calibrate a
   // participant and then show them a 404, so the camera never starts.
   if (study.stimulus.kind === "url" && "problem" in normaliseStimulusUrl(study.stimulus.url)) {
-    status.textContent = "This study's address cannot be loaded, so a session cannot run against it.";
-    status.classList.add("error");
+    setStatus("This study's address cannot be loaded, so a session cannot run against it.", "bad");
     // The rest of the session apparatus would only dress up a dead end.
     preview.remove();
+    privacyNote.remove();
     panel.querySelectorAll(".field, .checkbox").forEach((node) => node.remove());
     return;
   }
@@ -784,17 +952,14 @@ async function runSession(study: Study): Promise<void> {
    * operator was left with a dead teal rectangle and no way forward. */
   const startCamera = async (): Promise<void> => {
     clear(actions);
-    status.classList.remove("error");
-    status.textContent = "Starting camera…";
+    clearOutcome();
+    setStatus("Starting camera…");
     preview.classList.remove("is-dead");
 
     try {
-      await engine.start((message) => {
-        status.textContent = message;
-      });
+      await engine.start((message) => setStatus(message));
     } catch (err) {
-      status.textContent = describeCameraFailure(err);
-      status.classList.add("error");
+      setStatus(describeCameraFailure(err), "bad");
       // A camera that never started has no picture to show. Hiding the frame
       // beats leaving a dead solid-teal rectangle on the screen; it comes back
       // if a retry succeeds.
@@ -816,34 +981,89 @@ async function runSession(study: Study): Promise<void> {
       return;
     }
 
-    status.textContent = "Camera running. Sit about an arm's length away, square to the screen.";
+    setStatus("Camera running. Sit about an arm's length away, square to the screen.");
+    watchTracker();
+    renderActions();
+  };
+
+  /** Puts the live camera readout back on the screen. Attached when the camera
+   * starts and again after a recording hands control back, because the
+   * recording stage takes the listener with it — without the re-attach, the
+   * one live indicator of whether the rig is working stays dead for the rest
+   * of the sitting, and the Calibrate gate freezes with it. */
+  function watchTracker(): void {
+    releaseStatusListener?.();
+    releaseStatusListener = engine.onStatus(onTrackerStatus);
+  }
+
+  function applyTrackerState(s: TrackerStatus): void {
+    settledUsable = s.usable;
+    // The oval is the peripheral read — a participant fixing their own framing
+    // is looking at the picture, not at the sentence under it.
+    preview.classList.toggle("is-tracking", s.usable);
+    preview.classList.toggle("is-lost", !s.faceVisible);
+    updateCalibrateGate();
 
     // Only rewrite the live region when the sentence actually changes: assigning
     // on every frame would have a screen reader narrating the fps counter. The
     // rate is quantised rather than left out of the comparison, because a figure
     // read off the first tracked frame and then frozen would advertise a still-
     // settling estimate as the session's throughput for the rest of the sitting.
-    let lastMessage = "";
-    releaseStatusListener?.();
-    releaseStatusListener = engine.onStatus((s) => {
-      const message = !s.faceVisible
-        ? "No face detected. Check your lighting and framing."
-        : !s.usable
-          ? "Face detected, but turned too far or too close to the edge of frame."
-          : `Tracking at ${Math.round(s.fps / 5) * 5} fps. Ready to calibrate.`;
-      if (message === lastMessage) return;
-      lastMessage = message;
-      status.textContent = message;
-    });
+    const message = !s.faceVisible
+      ? "No face detected. Check your lighting and framing."
+      : !s.usable
+        ? "Face detected, but turned too far or too close to the edge of frame."
+        : `Tracking at ${Math.round(s.fps / 5) * 5} fps. Ready to calibrate.`;
+    if (message === lastStatusMessage) return;
+    setStatus(message, s.usable ? "ok" : "warn");
+  }
 
-    renderActions();
-  };
+  /**
+   * Holds the readout steady through a blink.
+   *
+   * `usable` drops for every blink and for the settle frames after it, so a
+   * screen wired straight to it flashes the guide amber, rewrites the status
+   * sentence, and — now that the Calibrate button is gated on the same fact —
+   * disables the primary action, several times a minute. Good news applies at
+   * once; bad news has to persist for most of a second before it is shown, and
+   * whatever is true when the wait ends is what gets shown.
+   */
+  const BLINK_HOLD_MS = 800;
+  let lastRawStatus: TrackerStatus | null = null;
+  let holdTimer = 0;
+
+  function onTrackerStatus(s: TrackerStatus): void {
+    lastRawStatus = s;
+    if (s.usable) {
+      window.clearTimeout(holdTimer);
+      holdTimer = 0;
+      applyTrackerState(s);
+      return;
+    }
+    // Already reporting a problem: keep reporting the current one, so "no face"
+    // and "face turned away" swap without waiting on each other.
+    if (!settledUsable) {
+      applyTrackerState(s);
+      return;
+    }
+    if (holdTimer) return;
+    holdTimer = window.setTimeout(() => {
+      holdTimer = 0;
+      if (lastRawStatus) applyTrackerState(lastRawStatus);
+    }, BLINK_HOLD_MS);
+  }
 
   const beginRecording = async (validationError: number | null) => {
     // The recording screen has its own face-lost readout; this one would only
     // talk over it.
     releaseStatusListener?.();
     releaseStatusListener = null;
+    // Nothing is watching the tracker while the recording stage owns the
+    // screen, so the gate must not carry a stale "yes" back out of it.
+    window.clearTimeout(holdTimer);
+    holdTimer = 0;
+    settledUsable = false;
+    updateCalibrateGate();
     const outcome = await runRecording(app, {
       study,
       engine,
@@ -854,7 +1074,7 @@ async function runSession(study: Study): Promise<void> {
 
     if (outcome.status === "saved") {
       engine.stop();
-      await renderResults(app, study, () => void showStudyList());
+      await openResults(study);
       return;
     }
 
@@ -863,9 +1083,11 @@ async function runSession(study: Study): Promise<void> {
       // the study list silently here would spend a participant with no
       // explanation — say what happened, and keep the camera on so the
       // operator can recalibrate immediately.
-      status.textContent =
-        "The recording captured no usable gaze, so nothing was saved. Check lighting and framing, then recalibrate.";
-      status.classList.add("error");
+      setOutcome(
+        "The recording captured no usable gaze, so nothing was saved. Check lighting and framing, then recalibrate.",
+        "bad"
+      );
+      watchTracker();
       renderActions();
       return;
     }
@@ -876,11 +1098,30 @@ async function runSession(study: Study): Promise<void> {
 
   const calibrateThenRecord = async () => {
     clear(actions);
-    status.classList.remove("error");
-    const outcome = await runCalibration(engine, app);
+    clearOutcome();
+
+    let outcome: Awaited<ReturnType<typeof runCalibration>>;
+    try {
+      outcome = await runCalibration(engine, app);
+    } catch (err) {
+      // A participant who has just clicked eighteen dots has to be told what
+      // happened and offered the retry. This used to be an unhandled rejection:
+      // the real message ("Not enough calibration data (0 of 66 samples)") went
+      // to the console, the overlay unmounted, and the session panel was left
+      // with an empty actions container — no button, no error, thirty seconds
+      // of someone's work gone with the app looking simply broken.
+      setOutcome(
+        err instanceof Error && err.message
+          ? err.message
+          : "Calibration failed. Check lighting and framing, then try again.",
+        "bad"
+      );
+      renderActions();
+      return;
+    }
 
     if (outcome.cancelled) {
-      status.textContent = "Calibration cancelled.";
+      setOutcome("Calibration cancelled. Nothing was saved.");
       renderActions();
       return;
     }
@@ -918,15 +1159,34 @@ async function runSession(study: Study): Promise<void> {
     );
   };
 
+  /** Whether the tracker is returning gaze it would fit a model on, held
+   * steady through blinks by onTrackerStatus. Calibration cannot succeed
+   * without it, so the button says so rather than letting someone find out at
+   * the end of eighteen clicks. */
+  let settledUsable = false;
+  let calibrateBtn: HTMLButtonElement | null = null;
+
+  function updateCalibrateGate(): void {
+    if (!calibrateBtn) return;
+    calibrateBtn.disabled = !settledUsable;
+    if (settledUsable) calibrateBtn.removeAttribute("title");
+    else {
+      calibrateBtn.setAttribute(
+        "title",
+        "Waiting for a clear view of the face — calibration cannot succeed until the camera is tracking"
+      );
+    }
+  }
+
   function renderActions(): void {
     clear(actions);
-    actions.append(
-      el(
-        "button",
-        { class: "btn btn-primary", type: "button", onclick: () => void calibrateThenRecord() },
-        "Calibrate"
-      )
+    calibrateBtn = el(
+      "button",
+      { class: "btn btn-primary", type: "button", onclick: () => void calibrateThenRecord() },
+      "Calibrate"
     );
+    actions.append(calibrateBtn);
+    updateCalibrateGate();
 
     if (stored) {
       const age = Math.round((Date.now() - stored.savedAt) / 60000);

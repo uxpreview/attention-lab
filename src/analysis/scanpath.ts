@@ -27,6 +27,13 @@ export interface ScanpathOptions {
   showNumbers?: boolean;
   /** Draw a colour gradient over time (early = cool, late = warm). */
   colourByTime?: boolean;
+  /**
+   * Device pixels per CSS pixel. Radii are already given in device pixels, and
+   * the numerals have to be too: with the ordinal clamp fixed in CSS pixels, a
+   * retina canvas rendered a 20px numeral that landed on screen at 10px, half
+   * of it eaten by its own contrast halo.
+   */
+  scale?: number;
 }
 
 /** A fixation circle, as far as label placement is concerned. */
@@ -48,6 +55,13 @@ export interface OrdinalLabel {
 }
 
 type Placed = Pick<OrdinalLabel, "x" | "y" | "halfWidth" | "halfHeight">;
+
+/** Ordinal size bounds, in CSS pixels before {@link ScanpathOptions.scale}.
+ * The floor is the payload's legibility floor: the order of the sequence is the
+ * only thing a scanpath says, and a numeral that needs leaning in to read says
+ * it to nobody. */
+const MIN_ORDINAL_PX = 14;
+const MAX_ORDINAL_PX = 30;
 
 /** Canvas text metrics are unavailable in the headless figure shim, and
  * measureText is overkill for two or three digits: the numerals are tabular
@@ -81,13 +95,16 @@ const CALLOUT_ANGLES = [-Math.PI / 4, -Math.PI / 2, 0, -(3 * Math.PI) / 4, Math.
  * Pure, and exported, because this is the part worth testing — the drawing
  * around it is not.
  */
-export function layoutOrdinals(circles: OrdinalCircle[]): OrdinalLabel[] {
+export function layoutOrdinals(circles: OrdinalCircle[], scale = 1): OrdinalLabel[] {
   const placed: Placed[] = [];
   const out: OrdinalLabel[] = [];
 
   for (let i = 0; i < circles.length; i++) {
     const c = circles[i];
-    const fontSize = Math.max(11, Math.min(20, c.radius * 0.85));
+    const fontSize = Math.max(
+      MIN_ORDINAL_PX * scale,
+      Math.min(MAX_ORDINAL_PX * scale, c.radius * 0.85)
+    );
     const halfWidth = labelHalfWidth(String(i + 1), fontSize);
     const halfHeight = fontSize * 0.55;
 
@@ -126,6 +143,7 @@ export function renderScanpath(
   const maxRadius = options.maxRadius ?? 46;
   const showNumbers = options.showNumbers ?? true;
   const colourByTime = options.colourByTime ?? true;
+  const scale = options.scale ?? 1;
 
   const width = canvas.width;
   const height = canvas.height;
@@ -139,44 +157,57 @@ export function renderScanpath(
   for (const f of fixations) maxDuration = Math.max(maxDuration, f.duration);
   if (maxDuration <= 0) maxDuration = 1;
 
-  const px = (f: Fixation) => ({ x: f.x * width, y: f.y * height });
+  // Geometry for every fixation first, because the saccades need to know the
+  // radius at both of their ends before they can be drawn.
+  const circles: Array<{ x: number; y: number; radius: number; t: number }> = fixations.map(
+    (f, i) => ({
+      x: f.x * width,
+      y: f.y * height,
+      // Area, not radius, scales with duration — otherwise long fixations read
+      // as far more dominant than they are.
+      radius: minRadius + (maxRadius - minRadius) * Math.sqrt(f.duration / maxDuration),
+      t: colourByTime ? i / Math.max(1, fixations.length - 1) : 0.5,
+    })
+  );
 
-  // Saccades first, so the fixation circles sit on top of the connecting lines.
+  // Saccades, clipped at each circle's rim rather than run through its middle.
+  // Drawing the polyline underneath the circles is not enough on its own: the
+  // fills are translucent, so a line crossing a circle still showed through and
+  // struck out the numeral inside it. Each segment now starts and ends on the
+  // rim, which is also how a saccade actually reads — a jump *between* two
+  // fixations, not a line through them.
+  //
   // Drawn twice: a light halo underneath a dark line, so the path stays legible
   // over both pale wireframes and dark screenshots.
-  const path = new Path2D();
-  for (let i = 0; i < fixations.length; i++) {
-    const p = px(fixations[i]);
-    if (i === 0) path.moveTo(p.x, p.y);
-    else path.lineTo(p.x, p.y);
+  const saccades = new Path2D();
+  for (let i = 1; i < circles.length; i++) {
+    const a = circles[i - 1];
+    const b = circles[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    // Overlapping circles have no gap to draw a saccade in; the ordering is
+    // carried by the ordinals there.
+    if (length <= a.radius + b.radius + 1) continue;
+    saccades.moveTo(a.x + (dx / length) * a.radius, a.y + (dy / length) * a.radius);
+    saccades.lineTo(b.x - (dx / length) * b.radius, b.y - (dy / length) * b.radius);
   }
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 5 * scale;
   ctx.strokeStyle = "rgba(255,255,255,0.85)";
-  ctx.stroke(path);
-  ctx.lineWidth = 2;
+  ctx.stroke(saccades);
+  ctx.lineWidth = 2 * scale;
   ctx.strokeStyle = "rgba(20,26,38,0.8)";
-  ctx.stroke(path);
+  ctx.stroke(saccades);
 
-  const circles: Array<{ x: number; y: number; radius: number; t: number }> = [];
-
-  for (let i = 0; i < fixations.length; i++) {
-    const f = fixations[i];
-    const p = px(f);
-    // Area, not radius, scales with duration — otherwise long fixations read as
-    // far more dominant than they are.
-    const scaled = Math.sqrt(f.duration / maxDuration);
-    const radius = minRadius + (maxRadius - minRadius) * scaled;
-    const t = colourByTime ? i / Math.max(1, fixations.length - 1) : 0.5;
-    circles.push({ x: p.x, y: p.y, radius, t });
-
-    ctx.fillStyle = scanpathColour(t, 0.55);
-    ctx.strokeStyle = scanpathColour(t, 0.95, 40);
-    ctx.lineWidth = 2;
+  for (const c of circles) {
+    ctx.fillStyle = scanpathColour(c.t, 0.55);
+    ctx.strokeStyle = scanpathColour(c.t, 0.95, 40);
+    ctx.lineWidth = 2 * scale;
 
     ctx.beginPath();
-    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+    ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
@@ -185,7 +216,7 @@ export function renderScanpath(
 
   // Ordinals in a second pass, so a later circle cannot paint over an earlier
   // number.
-  const labels = layoutOrdinals(circles);
+  const labels = layoutOrdinals(circles, scale);
 
   for (let i = 0; i < circles.length; i++) {
     const c = circles[i];
@@ -198,13 +229,13 @@ export function renderScanpath(
       const dx = spot.x - c.x;
       const dy = spot.y - c.y;
       const length = Math.hypot(dx, dy) || 1;
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 3 * scale;
       ctx.strokeStyle = "rgba(255,255,255,0.85)";
       ctx.beginPath();
       ctx.moveTo(c.x + (dx / length) * c.radius, c.y + (dy / length) * c.radius);
       ctx.lineTo(spot.x, spot.y);
       ctx.stroke();
-      ctx.lineWidth = 1.25;
+      ctx.lineWidth = 1.25 * scale;
       ctx.strokeStyle = scanpathColour(c.t, 0.95, 40);
       ctx.beginPath();
       ctx.moveTo(c.x + (dx / length) * c.radius, c.y + (dy / length) * c.radius);
@@ -214,11 +245,17 @@ export function renderScanpath(
 
     // The same family as the rest of the UI: canvas text in the system stack
     // renders in a visibly different typeface from every label around it.
-    ctx.font = `600 ${spot.fontSize}px ${CANVAS_FONT_FAMILY}`;
+    //
+    // The halo is a fraction of the glyph rather than a fixed 3px. At the old
+    // sizes a 3px stroke closed most of the counter of a numeral and the white
+    // fill barely survived it, which is how "large white numeral, dark halo"
+    // rendered on screen as a small dark-grey one.
+    ctx.font = `700 ${spot.fontSize}px ${CANVAS_FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(2 * scale, spot.fontSize * 0.22);
+    ctx.strokeStyle = "rgba(12,18,24,0.75)";
     ctx.strokeText(text, spot.x, spot.y);
     ctx.fillStyle = "#fff";
     ctx.fillText(text, spot.x, spot.y);

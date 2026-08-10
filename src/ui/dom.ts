@@ -74,6 +74,18 @@ export function inertSiblings(host: HTMLElement, overlay: HTMLElement): () => vo
  * storage, so deletion has no server copy and no undo — nothing destructive
  * should fire on a single click, and a native confirm() would break the
  * page's voice to ask.
+ *
+ * The armed state wears `--signal-bad` (see `.btn.is-armed`), because it used
+ * to arm in the same teal outline as every other secondary control: the one
+ * irreversible action in the app asked for confirmation more quietly than the
+ * low-signal quality badge two lines above it.
+ *
+ * Both labels are always in the button, stacked in one grid cell with the
+ * inactive one hidden. That fixes the width at the wider of the two, so arming
+ * cannot reflow the row it sits in — the recordings list used to push the
+ * participant's stats onto a second line at the exact moment the operator was
+ * deciding whether to go through with it. `visibility: hidden` also keeps the
+ * hidden label out of the accessibility tree, so it is never read twice.
  */
 export function confirmButton(
   label: string,
@@ -81,20 +93,22 @@ export function confirmButton(
   onConfirm: () => void,
   className = "btn btn-ghost btn-small"
 ): HTMLButtonElement {
-  const btn = el("button", { class: className, type: "button" }, label);
+  const btn = el(
+    "button",
+    { class: `${className} confirm-btn`, type: "button" },
+    el("span", { class: "confirm-rest" }, label),
+    el("span", { class: "confirm-armed" }, armedLabel)
+  );
   let disarm = 0;
   btn.addEventListener("click", () => {
-    if (btn.classList.contains("is-active")) {
+    if (btn.classList.contains("is-armed")) {
       window.clearTimeout(disarm);
+      btn.classList.remove("is-armed");
       onConfirm();
       return;
     }
-    btn.classList.add("is-active");
-    btn.textContent = armedLabel;
-    disarm = window.setTimeout(() => {
-      btn.classList.remove("is-active");
-      btn.textContent = label;
-    }, 3000);
+    btn.classList.add("is-armed");
+    disarm = window.setTimeout(() => btn.classList.remove("is-armed"), 3000);
   });
   return btn;
 }

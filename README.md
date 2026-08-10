@@ -79,8 +79,9 @@ rendered empty; what is verified and what is not; and what is still open.
 
 ## What you get
 
-- **Heatmap** — dwell-weighted attention, scaled to the 98th percentile so one
-  long stare does not flatten everything else.
+- **Heatmap** — dwell-weighted attention, scaled to a high percentile of the
+  per-blob peaks rather than of the pixels, so one long stare saturates without
+  flattening every other cluster into the cold end of the ramp.
 - **Spotlight** — the inverse: dims what was ignored. Usually the more
   persuasive version in a readout.
 - **Contours** — banded isolines, easier to cite exact regions from.
