@@ -553,6 +553,19 @@ p {
   color: var(--accent-ink);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
+/* A count is a caption on the heading beside it, and nothing you can press.
+   The class was applied in two places and styled in none, so both counts fell
+   back to the base chip — a filled, bordered lozenge the same size and shape as
+   .btn-small. Next to a real button that reads as a disabled control, which is
+   an affordance the number does not have. Ground and border come off and the
+   inline padding goes with them, since the flex gap already sets it off the
+   title. The colour is deliberately not overridden: --body-2 is the value the
+   base rule reasoned to for AA on this exact element. */
+.pill-count {
+  background: none;
+  border-color: transparent;
+  padding-inline: 0;
+}
 
 /* --- Controls --------------------------------------------------------- */
 /* Pills. The primary is an ink outline that fills on hover and flips its label
@@ -2365,8 +2378,11 @@ p {
   margin: 5px 6px;
   background: var(--line);
 }
+/* A disclosure arrow has to survive being small. At 9px the glyph's own
+   counters collapse and it rasterises to an indistinct mark — "Export ▾" read
+   as "Export ·", a stray middle dot rather than a control that opens. */
 .menu-caret {
-  font-size: 9px;
+  font-size: 11px;
   vertical-align: 1px;
 }
 .results-header h1 {
@@ -2377,8 +2393,13 @@ p {
   letter-spacing: -0.015em;
   color: var(--strong);
   margin: 0;
-  flex: 1;
-  max-width: none;
+  /* Not `flex: 1`. The count chip is a sibling in .results-title and belongs
+     against the name it counts; a growing h1 pushed it the full width of the
+     header, parking it beside the export button where it read as part of that
+     toolbar. Shrink-wrapping keeps the two together, and `min-width: 0` lets a
+     long study name give way rather than push the chip out of the row. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 /**
  * How tall the stage may be — measured, not guessed.
