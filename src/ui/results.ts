@@ -1,9 +1,10 @@
 import { aggregateAois, analyseAois, type Aoi, type AoiResult } from "../analysis/aoi";
 import { detectFixations, summarise, type Fixation } from "../analysis/fixations";
-import { renderHeatmap, type HeatPoint } from "../analysis/heatmap";
+import { kernelRatio, renderHeatmap, type HeatPoint } from "../analysis/heatmap";
 import {
   OVERLAY_LABELS,
   participantColour,
+  type LegendBlur,
   type LegendScale,
   type OverlayMode,
 } from "../analysis/legend";
@@ -49,6 +50,202 @@ type ViewMode = OverlayMode;
 type AoiSortKey = "seen" | "dwell" | "ttff";
 
 const VIEW_MODES: ViewMode[] = ["heat", "spotlight", "contour", "scanpath", "raw"];
+
+/** The stage's own `min-height` in `.results-stage`. Below it the stylesheet
+ * governs and a smaller `--stage-cap` would only be a number CSS ignores. */
+export const STAGE_MIN_HEIGHT = 320;
+
+/** The three measurements the stage's ceiling is arithmetic over. */
+export interface StageChrome {
+  /** Viewport height, in CSS pixels. */
+  viewport: number;
+  /** Document-space distance from the top of the page to the top of the stage
+   * — everything the column puts above the artboard. */
+  above: number;
+  /** Everything below the stage inside its column: the legend that decodes the
+   * overlay, the empty-state strip, and the margins that join them. */
+  under: number;
+}
+
+/**
+ * How tall the artboard is allowed to be, so that it and the legend that
+ * decodes it both end at the fold.
+ *
+ * Pure and exported because this is a contract, not a preference, and because
+ * the only other way to check it is to open a browser at a particular size.
+ *
+ * It used to be the larger of two terms. The first is the one below. The second
+ * was `rail height − stage bar − under`, bounded by `viewport − above`, and it
+ * existed to stop the row's slack being stranded as cream when the rail is
+ * taller than the column beside it. That bound omitted `under`, and the
+ * omission was the whole bug: at 1440×900 it returned 614 where the honest
+ * number is 551, and the 63px difference was the legend — title strip visible,
+ * the 0ms / 540ms / ≥1.1s ticks that make the picture readable pushed off the
+ * screen.
+ *
+ * Only above 1180px, where the column is a column. Below that `.results-main` is
+ * `display: contents`, so this term never applied there and never did — the
+ * legend sits far below the fold at those widths for a different reason
+ * entirely: it is ordered *after* the rail (see the max-width: 1180px block in
+ * styles.css), which puts ~780px of sidebar between the picture and its scale.
+ * That is a deliberate trade made to keep the view switcher off the bottom of a
+ * 1024×800 screen, and no arithmetic here can undo it.
+ *
+ * Adding `under` back to that bound does not merely correct it, it retires it:
+ * `max(fold, min(rail, fold))` is `fold` for every possible rail height. The two
+ * goals are in direct conflict — the stage cannot both stop at the fold and grow
+ * past it to match a taller rail — and the fold wins, because the legend is what
+ * makes the overlay a measurement rather than a picture. What that costs is
+ * visible: on a study whose rail runs taller than its column, the column ends at
+ * the fold and the rail runs on below it, leaving that much ground beside the
+ * rail's tail. It is ground the reader only reaches by scrolling, which is
+ * exactly where it is cheapest.
+ */
+export function stageCap(chrome: StageChrome): number {
+  return Math.max(
+    STAGE_MIN_HEIGHT,
+    Math.round(chrome.viewport - chrome.above - chrome.under)
+  );
+}
+
+/**
+ * The share of the artboard a contained figure has to fall below before the
+ * screen offers fit-width on its own.
+ *
+ * A stimulus that fills three quarters of the stage's width is fine contained;
+ * below that it is being shown well under its designed size with the rest of the
+ * artboard as ground, which is the state the affordance exists for.
+ */
+export const AUTO_FIT_RATIO = 0.75;
+
+/** Whether a figure of this width is starved inside a stage of that width. Pure
+ * so the threshold can be checked against measured geometry without a browser —
+ * the reason it never fired for so long is that it was only ever *called* with
+ * geometry that was not final. */
+export function shouldFitWidth(figureWidth: number, stageWidth: number): boolean {
+  if (stageWidth <= 0 || figureWidth <= 0) return false;
+  return figureWidth / stageWidth < AUTO_FIT_RATIO;
+}
+
+/**
+ * Who the results screen is reporting on — computed once, read by everything
+ * that states a scope.
+ *
+ * This exists because the screen contradicted itself. In Scanpath view the
+ * header pill said "4 of 5 recordings", the rail said "Summary — P01", the
+ * region table under them printed the four-participant aggregate, all four
+ * scoped export rows said "4 of 5 recordings", and the PNG they produced held
+ * one person's path over a caption reading "All participants". Four statements,
+ * three different denominators, one screen. Each was independently correct
+ * about a different set, because each computed its own — `paintCountPill` read
+ * `aggregateSet()`, `scopeSummary` read `selected`, the PNG read a literal
+ * string, and only the rail knew a scanpath is one person's path.
+ *
+ * So the set is decided in exactly one place ({@link reportedScope}) and the
+ * four sentences below are the only wordings of it. They differ in register —
+ * a pill is not a file's provenance line — but never in who they are counting,
+ * and the tests assert that.
+ */
+export interface ReportedScope {
+  /** The participants the stage, the rail, the region table and the exports
+   * all cover, in draw order. */
+  participants: string[];
+  /** Recordings in the study, whatever is being reported on. */
+  total: number;
+  /** True when the set narrowed to one person because the *view* is per-person,
+   * rather than because a participant was picked. Only the file note prints the
+   * reason, but it decides the wording there. */
+  perView: boolean;
+  /** Recordings in the study below the quality threshold. */
+  flagged: number;
+  /** Whether those flagged recordings are being held out of the aggregate. */
+  excludingFlagged: boolean;
+}
+
+/** One person out of several: the case every statement here used to get
+ * differently. A one-recording study is not "solo" — there is nobody to be
+ * distinguished from. */
+function isSolo(scope: ReportedScope): boolean {
+  return scope.participants.length === 1 && scope.total > 1;
+}
+
+function recordingWord(total: number): string {
+  return total === 1 ? "recording" : "recordings";
+}
+
+/**
+ * The header pill: the count, and whose it is.
+ *
+ * It read `aggregateSet().length` — a fact about the study rather than about
+ * the screen — so it kept printing the aggregate's denominator while the rail
+ * beside it, the table below it and the figure between them were describing one
+ * person.
+ */
+export function scopePill(scope: ReportedScope): { text: string; title: string } {
+  if (isSolo(scope)) {
+    return {
+      text: `${scope.participants[0]} — 1 of ${scope.total} ${recordingWord(scope.total)}`,
+      title: scope.perView
+        ? "A scanpath is one person's path, so this screen is reporting on one recording"
+        : "One participant is selected, so this screen is reporting on one recording",
+    };
+  }
+  if (scope.participants.length < scope.total) {
+    return {
+      text: `${scope.participants.length} of ${scope.total} recordings`,
+      title: "Low-signal recordings are excluded from the aggregate",
+    };
+  }
+  return { text: `${scope.total} ${recordingWord(scope.total)}`, title: "" };
+}
+
+/** The scope as one phrase, for the export menu's rows, the region table's
+ * caption and the printed page. */
+export function scopeSentence(scope: ReportedScope): string {
+  if (isSolo(scope)) {
+    return `${scope.participants[0]} only — 1 of ${scope.total} ${recordingWord(scope.total)}`;
+  }
+  if (scope.participants.length === scope.total) {
+    return `all ${scope.total} ${recordingWord(scope.total)}`;
+  }
+  return `${scope.participants.length} of ${scope.total} recordings`;
+}
+
+/**
+ * The provenance line written into every exported CSV above the header row.
+ *
+ * A file outlives the screen it came from, so this is the one wording that
+ * carries *why* the set is what it is — including the fact that a scanpath is
+ * per-person, which is otherwise invisible once the file is open in a
+ * spreadsheet.
+ */
+export function scopeNote(scope: ReportedScope): string {
+  if (isSolo(scope)) {
+    const why = scope.perView ? " (scanpath view is per-person)" : "";
+    return `Single participant: ${scope.participants[0]} — 1 of ${scope.total} ${recordingWord(scope.total)}${why}`;
+  }
+  if (scope.excludingFlagged) {
+    return `All participants, low-signal excluded — ${scope.participants.length} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
+  }
+  if (scope.flagged > 0) {
+    return `All participants, low-signal included — ${scope.total} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
+  }
+  return `All participants — ${scope.total} of ${scope.total} ${recordingWord(scope.total)}`;
+}
+
+/**
+ * The scope stamped into the exported PNG's caption band.
+ *
+ * It was the literal string "All participants" on a file whose pixels held one
+ * person's scanpath — the single worst statement on the screen, because the PNG
+ * is the artifact that leaves the tool and gets pasted into a deck with nothing
+ * beside it to check against.
+ */
+export function scopeCaption(scope: ReportedScope): string {
+  if (isSolo(scope)) return scope.participants[0];
+  if (scope.excludingFlagged) return "All participants, low-signal excluded";
+  return "All participants";
+}
 
 interface AnalysedRecording {
   recording: Recording;
@@ -264,6 +461,16 @@ export async function renderResults(
   // rendered unconditionally, so a 1440px desktop window was told to rotate a
   // monitor.
   const lightboxHint = el("p", { class: "lightbox-hint", hidden: true }, "Rotate for a wider view");
+  /**
+   * What the expanded figure is a picture of.
+   *
+   * Expand is the view that gets screenshotted for a deck, and it carried no
+   * study name, no participant count and — because the legend stayed behind in
+   * the column — no colour scale: a 1064×831 heatmap a reader cannot ask "is
+   * dark red 300ms or 3s, and is this one person or four" of. Both facts follow
+   * the figure in now, in the same words the rest of the screen uses.
+   */
+  const lightboxScope = el("p", { class: "lightbox-scope" });
   const canRotate = (): boolean =>
     typeof window.matchMedia === "function" &&
     window.matchMedia("(orientation: portrait) and (max-width: 700px)").matches;
@@ -278,6 +485,7 @@ export async function renderResults(
     el(
       "div",
       { class: "lightbox-bar" },
+      lightboxScope,
       lightboxHint,
       el(
         "button",
@@ -294,6 +502,14 @@ export async function renderResults(
       type: "button",
       onclick: () => {
         lightboxBody.append(figure);
+        // The legend travels with the figure it decodes, as the last row of the
+        // dialog — the same element, so there is no second legend that could
+        // key a different scale from the one on the stage. It goes back to the
+        // column in the `close` handler below.
+        if (hasRecordings) lightbox.append(legend);
+        lightboxScope.textContent = hasRecordings
+          ? `${study.name} — ${scopeSummary()}`
+          : study.name;
         lightboxHint.hidden = !canRotate();
         lightbox.showModal();
         // The figure's box has just changed by a factor of four; the canvas
@@ -361,17 +577,32 @@ export async function renderResults(
     setFit(!fitWidth);
   });
 
-  /** Picks the fit the stimulus needs, once, before anyone has expressed a
-   * preference. A stimulus that fits the stage within a quarter of its width is
-   * fine contained; below that it is being shown at half its designed size,
-   * which is the state this whole affordance exists for. */
+  /**
+   * Picks the fit the stimulus needs, once, before anyone has expressed a
+   * preference. See {@link shouldFitWidth} for the threshold.
+   *
+   * The threshold was right and the measurement was not. This ran once, on the
+   * line after the first `draw()`, and at that moment the legend under the stage
+   * had only just been filled in: `--stage-cap` still held the value computed
+   * against an empty legend, which is 128px too generous, so the height-bound
+   * figure was measured 128px too wide. Sampled at 80ms intervals on a fresh
+   * load, `aria-pressed` was "false" in every sample at 1180, 1100 and 1024
+   * while the settled ratios were 0.626, 0.675 and 0.731 — all below the
+   * threshold, none of them ever tested. At 1180 the pre-cap ratio was 0.757:
+   * it missed by seven thousandths of the number it was comparing against.
+   *
+   * So the caller measures a settled stage (see the end of this function), and
+   * this asserts it rather than trusting the call site: with no legend measured
+   * yet there is nothing to fit against, and re-running later would fight an
+   * operator who has since chosen.
+   */
   let autoFitDone = false;
   const autoFit = (): void => {
     if (autoFitDone || fitChosen || !stimulusImage) return;
     autoFitDone = true;
-    const stageWidth = scroller.clientWidth;
-    const figureWidth = figure.getBoundingClientRect().width;
-    if (stageWidth > 0 && figureWidth / stageWidth < 0.75) setFit(true);
+    if (shouldFitWidth(figure.getBoundingClientRect().width, scroller.clientWidth)) {
+      setFit(true);
+    }
   };
 
   // Both are absolutely positioned or in the top layer, so neither takes part
@@ -379,6 +610,9 @@ export async function renderResults(
   // backdrop as well as the button.
   lightbox.addEventListener("close", () => {
     scroller.append(figure);
+    // Back to the foot of the column, which is where `chromeUnderStage`
+    // measures it and where the stage's ceiling is bought from.
+    mainColumn.append(legend);
     void draw();
   });
   // The tools group holds only what applies. A URL study's figure *is* the
@@ -462,18 +696,9 @@ export async function renderResults(
    * 631, so a third of the wireframe was inside a scroller with no scrollbar,
    * and the region table the reserve was bought for still opened below the fold.
    *
-   * Two numbers replace the constant, both read from the live layout:
-   *
-   *   viewport − (top of the stage) − (everything under it in the column)
-   *
-   * is the height at which the stage and the legend that decodes it end exactly
-   * at the fold, and
-   *
-   *   rail height − (stage bar) − (everything under the stage in the column)
-   *
-   * is the height at which the stage fills its grid row. The larger wins: the
-   * first is the promise about the first screen, the second stops the row's
-   * slack being stranded as cream beside a rail that is taller than the column.
+   * What replaces it is read from the live layout — see {@link stageCap} for
+   * the arithmetic and for why the second term this function used to carry, the
+   * one that grew the stage into a taller rail's slack, is gone.
    *
    * Nothing here depends on the stage's own height, so this settles in one pass
    * rather than converging: the stage's distance from the top of the document is
@@ -482,7 +707,13 @@ export async function renderResults(
    */
   const chromeUnderStage = (): number =>
     [emptyStrip, legend].reduce((total, node) => {
-      if (!node || !node.isConnected) return total;
+      // `isConnected` is not the whole question — the legend travels into the
+      // lightbox (see zoomButton) and is still connected there, in the top
+      // layer, where it costs the column nothing. Nor is "is it inside the main
+      // column", because the dialog is a child of the stage and so still inside
+      // it. What disqualifies a node is being in the dialog; without that test,
+      // expanding the figure charged the stage 114px of chrome that had left it.
+      if (!node || !node.isConnected || lightbox.contains(node)) return total;
       const box = node.getBoundingClientRect();
       if (box.height === 0) return total;
       return total + box.height + (parseFloat(getComputedStyle(node).marginTop) || 0);
@@ -492,36 +723,13 @@ export async function renderResults(
   const fitStageCap = (): void => {
     if (!stage.isConnected) return;
     const stageBox = stage.getBoundingClientRect();
-    const under = chromeUnderStage();
-    // Document-space, so a page scrolled down does not report a shorter reserve
-    // than the one the operator actually landed on.
-    const above = stageBox.top + window.scrollY;
-    let cap = window.innerHeight - above - under;
-
-    // Only where the column is a column. Below 1180px `.results-main` is
-    // `display: contents` and the rail is stacked under the stage rather than
-    // beside it, so there is no row to share and no slack to reclaim.
-    //
-    // The sidebar, not the rail that wraps it: the wrapper is stretched to the
-    // grid row so the sticky sidebar inside it has a runway, which means its
-    // height is the row's height, which is partly the stage's — measuring it
-    // would be measuring this function's own output and the cap would climb on
-    // every pass. The sidebar's height is its content and nothing else.
-    if (mainColumn.getClientRects().length > 0) {
-      const barAboveStage = stageBox.top - layout.getBoundingClientRect().top;
-      const fillsRow = sidebar.getBoundingClientRect().height - barAboveStage - under;
-      // Bounded by the bottom of the first screen. The rail's height is nearly a
-      // constant — its tallest state measures about 780px — so on a short window
-      // this term alone would keep asking for a 614px stage inside a 650px
-      // viewport: an artboard taller than the screen showing it, which is worse
-      // than the cream it was reclaiming. Growing into the row's slack is only
-      // ever worth it while the stage still fits on the screen.
-      cap = Math.max(cap, Math.min(fillsRow, window.innerHeight - above));
-    }
-
-    // The floor is the stage's own min-height; below it the declaration in the
-    // stylesheet governs and this would only be writing a number CSS ignores.
-    const next = Math.max(320, Math.round(cap));
+    const next = stageCap({
+      viewport: window.innerHeight,
+      // Document-space, so a page scrolled down does not report a shorter
+      // reserve than the one the operator actually landed on.
+      above: stageBox.top + window.scrollY,
+      under: chromeUnderStage(),
+    });
     if (next === appliedCap) return;
     appliedCap = next;
     layout.style.setProperty("--stage-cap", `${next}px`);
@@ -581,18 +789,16 @@ export async function renderResults(
    * active set, so a study with one auto-excluded low-signal session opened on
    * "4 recordings" beside "All participants (3)": two contradictory totals, both
    * correct, with the reconciliation buried in a note further down. Saying "3 of
-   * 4" here makes that note a confirmation instead of a correction.
+   * 4" here makes that note a confirmation instead of a correction — and it now
+   * takes that count from {@link reportedScope}, the same value the rail, the
+   * region table and the export rows are worded from, so it also stops
+   * disagreeing with them in the per-person views.
    */
   const countPill = el("span", { class: "pill pill-count" });
   function paintCountPill(): void {
-    const total = recordings.length;
-    const kept = aggregateSet().length;
-    countPill.textContent =
-      kept === total
-        ? `${total} recording${total === 1 ? "" : "s"}`
-        : `${kept} of ${total} recordings`;
-    countPill.title =
-      kept === total ? "" : "Low-signal recordings are excluded from the aggregate";
+    const pill = scopePill(reportedScope());
+    countPill.textContent = pill.text;
+    countPill.title = pill.title;
   }
 
   /**
@@ -622,18 +828,11 @@ export async function renderResults(
     );
   }
 
-  /** The scoped exports' coverage, in the same counting the header pill uses. */
+  /** The scoped exports' coverage, in the same counting the header pill uses.
+   * It read `selected` alone, so in the per-person views it promised four
+   * participants' data under a button that produced one person's picture. */
   function scopeSummary(): string {
-    const total = recordings.length;
-    const plural = total === 1 ? "" : "s";
-    if (selected !== "all") {
-      const one = activeSet()[0]?.recording.participant ?? "—";
-      return `${one} only — 1 of ${total} recording${plural}`;
-    }
-    const kept = aggregateSet().length;
-    return kept === total
-      ? `all ${total} recording${plural}`
-      : `${kept} of ${total} recordings`;
+    return scopeSentence(reportedScope());
   }
 
   function paintExportScopes(): void {
@@ -743,6 +942,77 @@ export async function renderResults(
       ? aggregateSet()
       : analysed.filter((a) => a.recording.id === selected);
 
+  /**
+   * True when the *view* has narrowed the selection to one person.
+   *
+   * A combined scanpath across participants would be a path nobody took, so the
+   * renderer has always drawn the first of the selected set and the rail has
+   * always said so. What was missing is that nothing else on the screen knew:
+   * the pill, the region table and all four export rows went on counting the
+   * whole aggregate. This predicate is the one place that fact lives now.
+   */
+  const perViewSolo = (): boolean =>
+    mode === "scanpath" && selected === "all" && aggregateSet().length > 1;
+
+  /** The recordings every number, picture, table and file on this screen
+   * covers. Identical to `activeSet()` except in the per-person views. */
+  const reportedSet = (): AnalysedRecording[] => {
+    const set = activeSet();
+    return perViewSolo() ? set.slice(0, 1) : set;
+  };
+
+  const reportedScope = (): ReportedScope => ({
+    participants: reportedSet().map((a) => a.recording.participant),
+    total: recordings.length,
+    perView: perViewSolo(),
+    flagged: flaggedRecordings().length,
+    excludingFlagged: excludingLowSignal(),
+  });
+
+  /**
+   * How far to blur the attention field for the set on the stage.
+   *
+   * The ratio was the literal 0.055 for every study and every selection — see
+   * {@link kernelRatio} for what that cost. Both terms are averaged over the
+   * recordings actually being drawn, because that is the set whose uncertainty
+   * the picture is claiming: a selection of one 48px-error recording and one
+   * 184px one is genuinely less certain than either alone.
+   *
+   * `stimulusRect` is the stimulus as that participant saw it, in the same CSS
+   * pixels the validation error was measured in, so the two divide cleanly. The
+   * blur reported back is what was *drawn* — after the clamp — rather than what
+   * was asked for, because the caption is a statement about the picture.
+   */
+  const heatKernel = (
+    set: AnalysedRecording[]
+  ): { ratio: number; blur: LegendBlur | null } => {
+    const error = averageOf(
+      set
+        .map((a) => a.recording.quality.validationError)
+        .filter((v): v is number => v !== null)
+    );
+    const minDim = averageOf(
+      set
+        .map((a) => {
+          const q = a.recording.quality;
+          const width = q.stimulusRect.width || q.viewportWidth;
+          const height = q.stimulusRect.height || q.viewportHeight;
+          return Math.min(width, height);
+        })
+        .filter((d) => d > 0)
+    );
+    const ratio = kernelRatio(error, minDim ?? 0);
+    // Reported whenever there is a rect to have measured it against, including
+    // when the error itself was never captured: the blur is a fact about the
+    // picture either way, and a caption that goes quiet exactly when the number
+    // is least certain is the wrong way round.
+    if (minDim === null || minDim <= 0) return { ratio, blur: null };
+    // σ is half the splat radius — see renderHeatmap — and the radius is the
+    // ratio of the smaller dimension.
+    const sigma = (ratio * minDim) / 2;
+    return { ratio, blur: { degrees: pxToDegrees(sigma), pixels: sigma } };
+  };
+
   const draw = async (): Promise<void> => {
     await nextFrame();
     // Position is CSS's job now (see .results-figure): both layers are inset to
@@ -758,7 +1028,11 @@ export async function renderResults(
 
     overlay.setAttribute("aria-label", `${OVERLAY_LABELS[mode]} overlay`);
 
-    const set = activeSet();
+    // The same set the pill, the rail, the region table and the exports name:
+    // in the per-person views that is one recording, everywhere else it is the
+    // whole selection. Reading it from one place is what stops the picture and
+    // the sentence under it describing different people.
+    const set = reportedSet();
 
     heatScale = null;
 
@@ -783,11 +1057,21 @@ export async function renderResults(
       for (const a of set) {
         for (const f of a.fixations) points.push({ x: f.x, y: f.y, weight: f.duration });
       }
-      const ceiling = renderHeatmap(overlay, points, { style: mode, radiusRatio: 0.055 });
+      const kernel = heatKernel(set);
+      const ceiling = renderHeatmap(overlay, points, {
+        style: mode,
+        radiusRatio: kernel.ratio,
+      });
       // Spotlight is a mask: the same field drives it, but what it encodes is
       // "revealed or not", so a millisecond axis under it would name a quantity
-      // the picture does not carry.
-      if (mode !== "spotlight" && ceiling > 0) heatScale = { ceiling };
+      // the picture does not carry. How far the field was blurred is a fact
+      // about the mask all the same, so that part of the scale survives.
+      heatScale =
+        mode === "spotlight"
+          ? kernel.blur && { ceiling: 0, blur: kernel.blur }
+          : ceiling > 0
+            ? { ceiling, blur: kernel.blur }
+            : null;
     }
 
     // Spotlight dims the stage to near-black, which a deep-teal region box and
@@ -795,15 +1079,14 @@ export async function renderResults(
     // cream side of the palette for as long as the mask is up.
     stage.classList.toggle("stage--spotlight", mode === "spotlight");
 
-    // Only the scanpath's own participant is keyed, because that is the only
-    // one on the stage. With nothing on the stage there is nothing to key: a
-    // legend for an overlay that is not drawn is a caption for a missing
-    // figure.
-    const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
+    // `set` is already only what is on the stage — in the per-person views that
+    // is one recording — so the key names exactly what was drawn. With nothing
+    // on the stage there is nothing to key: a legend for an overlay that is not
+    // drawn is a caption for a missing figure.
     clear(legend);
     if (hasRecordings) {
       legend.append(
-        legendElement(mode, keyed.map((a) => a.recording.participant), heatScale)
+        legendElement(mode, set.map((a) => a.recording.participant), heatScale)
       );
     }
 
@@ -1166,11 +1449,10 @@ export async function renderResults(
     );
     participantSelect.value = selected;
 
-    const scopeName =
-      selected === "all"
-        ? `All participants (${aggregateSet().length})`
-        : (analysed.find((a) => a.recording.id === selected)?.recording.participant ??
-          "All participants");
+    // Paper has no dropdown and no pill, so the printed page states the scope
+    // in the same words the export menu does rather than in a fourth wording of
+    // its own.
+    const scopeName = capitalise(scopeSummary());
 
     sidebar.append(
       el("h3", {}, el("label", { for: "participant-filter" }, "Participants")),
@@ -1216,9 +1498,8 @@ export async function renderResults(
     // first recording auto-excluded as low signal it captioned the picture with
     // somebody else's name, and the rail reported the 4-participant aggregate
     // ("Fixations 110") beside a picture of 36.
-    const set = activeSet();
-    const soloScanpath = mode === "scanpath" && selected === "all" && set.length > 1;
-    const statSet = soloScanpath ? set.slice(0, 1) : set;
+    const soloScanpath = perViewSolo();
+    const statSet = reportedSet();
 
     if (soloScanpath) {
       sidebar.append(
@@ -1342,9 +1623,27 @@ export async function renderResults(
       return section;
     }
 
+    /**
+     * The regions, over the people the rest of the screen is reporting on.
+     *
+     * This read `activeSet()`, which in Scanpath view is the whole aggregate
+     * while everything around it — the pill, the picture, the rail, the export
+     * rows — is one person. It printed "Seen 50%" under a heading that said
+     * P01: 50% is two people out of four, a reading a single participant cannot
+     * produce, so the row was not merely differently scoped but arithmetically
+     * impossible for the scope stated above it.
+     *
+     * The scope is also stated rather than left to be inferred: the table is the
+     * block most likely to be pasted into a deck on its own, and it is the one
+     * that used to carry no scope at all.
+     */
+    if (hasRecordings) {
+      section.append(el("p", { class: "table-scope" }, `Covering ${scopeSummary()}.`));
+    }
+
     const aggregates = aggregateAois(
       aois,
-      activeSet().map((a) => a.aoiResults)
+      reportedSet().map((a) => a.aoiResults)
     );
 
     // The ranking *is* the finding, and a column of unaligned decimals does not
@@ -1545,11 +1844,13 @@ export async function renderResults(
    * One measured cell: the number, right-aligned on tabular figures, over a bar
    * scaled to the largest value in this table.
    *
-   * The bar is drawn from the right edge so it shares the numbers' alignment —
-   * six bars ending on the same line is the comparison; six bars starting on the
-   * same line with unaligned decimals above them is two competing readings of
-   * one column. A zero draws no bar at all, because a hairline at the right
-   * margin would read as a small value rather than none.
+   * The bar is drawn from the right edge of a track so it shares the numbers'
+   * alignment — six bars ending on the same line is the comparison; six bars
+   * starting on the same line with unaligned decimals above them is two
+   * competing readings of one column. A zero draws no bar at all, because a
+   * hairline at the right margin would read as a small value rather than none;
+   * the track stays, so a zero reads as an empty measure rather than as a cell
+   * that forgot to draw one.
    */
   function measureCell(
     label: string,
@@ -1558,13 +1859,16 @@ export async function renderResults(
     max: number
   ): HTMLElement {
     const fraction = max > 0 && value > 0 ? Math.min(1, value / max) : 0;
-    const bar = el("span", { class: "cell-bar", "aria-hidden": "true" });
+    const bar = el("span", { class: "cell-bar" });
     bar.style.setProperty("--v", fraction.toFixed(3));
     return el(
       "td",
       { class: "cell-measure", "data-label": label },
       el("span", { class: "cell-value" }, text),
-      fraction > 0 ? bar : null
+      // The track is what the bar is a fraction *of*: a 9px fill floating in a
+      // 108px cell reads as a stray mark, and the same fill inside a drawn
+      // track reads as a small quantity.
+      el("span", { class: "cell-track", "aria-hidden": "true" }, fraction > 0 ? bar : null)
     );
   }
 
@@ -1727,43 +2031,29 @@ export async function renderResults(
    * file saying 0.600, and nothing in the file hinted that the two were
    * counting different people. Every CSV now covers exactly what the stage and
    * the tables cover, and says which set that was.
+   *
+   * "Exactly what the stage covers" includes the per-person views: in Scanpath
+   * the stage is one participant, so these files are one participant's too, and
+   * the note says which and why. A file whose scope line disagrees with the
+   * rows under it is the same defect as a screen that disagrees with itself,
+   * only harder to notice.
    */
   function exportScope(): ExportScope {
-    const total = recordings.length;
-    if (selected !== "all") {
-      const one = activeSet()[0]?.recording.participant ?? "—";
-      return { note: `Single participant: ${one} — 1 of ${total} recordings` };
-    }
-    const flagged = flaggedRecordings().length;
-    const kept = aggregateSet().length;
-    if (excludingLowSignal()) {
-      return {
-        note: `All participants, low-signal excluded — ${kept} of ${total} recordings (${flagged} below the quality threshold)`,
-      };
-    }
-    if (flagged > 0) {
-      return {
-        note: `All participants, low-signal included — ${total} of ${total} recordings (${flagged} below the quality threshold)`,
-      };
-    }
-    return { note: `All participants — ${total} of ${total} recordings` };
+    return { note: scopeNote(reportedScope()) };
   }
 
   // The menu is built once: every handler reads `mode`, `selected`,
   // `analysed` and `aois` when it fires, so it never goes stale.
   exportMenu.append(
     exportItem("PNG overlay", "export-png", () => {
-      const set = activeSet();
-      const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
+      // The pixels and the caption come from the same set. They did not: the
+      // canvas was sliced to one participant for a scanpath while the caption
+      // was handed the literal string "All participants".
+      const scope = reportedScope();
       void exportOverlayPng(study, stimulusImage, overlay, {
         mode,
-        participants: keyed.map((a) => a.recording.participant),
-        scope:
-          selected === "all"
-            ? excludingLowSignal()
-              ? "All participants, low-signal excluded"
-              : "All participants"
-            : (keyed[0]?.recording.participant ?? "All participants"),
+        participants: scope.participants,
+        scope: scopeCaption(scope),
         aois,
         showAois,
         // The exported caption gets the same numbered axis the screen has, so
@@ -1774,14 +2064,14 @@ export async function renderResults(
     exportItem("Fixations CSV", "export-fixations", () =>
       exportFixationsCsv(
         study,
-        activeSet().map((a) => ({ recording: a.recording, data: a.fixations })),
+        reportedSet().map((a) => ({ recording: a.recording, data: a.fixations })),
         exportScope()
       )
     ),
     exportItem("Raw CSV", "export-raw", () =>
       exportRawCsv(
         study,
-        activeSet().map((a) => a.recording),
+        reportedSet().map((a) => a.recording),
         exportScope()
       )
     ),
@@ -1790,9 +2080,9 @@ export async function renderResults(
         study,
         aggregateAois(
           aois,
-          activeSet().map((a) => a.aoiResults)
+          reportedSet().map((a) => a.aoiResults)
         ),
-        activeSet().map((a) => ({ recording: a.recording, data: a.aoiResults })),
+        reportedSet().map((a) => ({ recording: a.recording, data: a.aoiResults })),
         exportScope()
       )
     ),
@@ -1806,10 +2096,18 @@ export async function renderResults(
 
   renderSidebar();
   renderData();
-  // Before the first draw and before the fit is chosen: both read the stage's
-  // size, and the cap is what sets it.
+  // Before the first draw, because the draw sizes the canvas off the figure and
+  // the cap is what sizes the figure.
   fitStageCap();
   await draw();
+  // And again after it, because the first call measured a legend that was still
+  // empty — `draw()` is what fills it — and so reserved nothing for the strip
+  // the stage has to end above. Only now is the stage the size it will settle
+  // at, which is the size the fit has to be chosen against: reading
+  // `getBoundingClientRect` forces the style recalc the property change needs,
+  // so autoFit below sees the settled geometry rather than the pre-cap one.
+  fitStageCap();
+  await nextFrame();
   autoFit();
   markStageClip();
 

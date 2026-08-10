@@ -12,8 +12,13 @@
 import { detectFixations, summarise } from "../analysis/fixations";
 import {
   contourBandColours,
+  DEFAULT_KERNEL_RATIO,
   fieldCeiling,
   fieldPercentile,
+  kernelRatio,
+  MAX_KERNEL_RATIO,
+  MAX_KERNEL_SIGMA_PX,
+  MIN_KERNEL_SIGMA_PX,
   paintField,
   rampColour,
   renderHeatmap,
@@ -22,8 +27,10 @@ import {
 import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
 import {
+  CIRCLE_ALPHA,
   layoutOrdinals,
   ORDINAL_BUDGET,
+  ORDINAL_HALO,
   planOrdinals,
   scanpathColour,
   selectOrdinals,
@@ -40,6 +47,17 @@ import {
   isInsideViewport,
 } from "../ui/record";
 import { formatOnset, SAMPLE_PERIOD_MS } from "../ui/dom";
+import {
+  AUTO_FIT_RATIO,
+  scopeCaption,
+  scopeNote,
+  scopePill,
+  scopeSentence,
+  shouldFitWidth,
+  stageCap,
+  STAGE_MIN_HEIGHT,
+  type ReportedScope,
+} from "../ui/results";
 import type { RecordingQuality } from "../data/types";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { MedianPoint, OneEuroPoint } from "../tracker/filter";
@@ -79,6 +97,31 @@ function rampParts(t: number): [number, number, number, number] {
 function rampRgb(t: number): [number, number, number] {
   const [r, g, b] = rampParts(t);
   return [r, g, b];
+}
+
+/**
+ * Just enough of a canvas for `renderHeatmap` to draw onto in Node: it clears,
+ * makes an ImageData and puts it back, and nothing else. The point is to measure
+ * what the real renderer paints rather than to re-implement it — see the kernel
+ * section, which reads the alpha channel back out of `pixels`.
+ */
+function stubCanvas(width: number, height: number): HTMLCanvasElement {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const context = {
+    clearRect: () => pixels.fill(0),
+    createImageData: (w: number, h: number) => ({
+      width: w,
+      height: h,
+      data: new Uint8ClampedArray(w * h * 4),
+    }),
+    putImageData: (image: { data: Uint8ClampedArray }) => pixels.set(image.data),
+  };
+  return {
+    width,
+    height,
+    pixels,
+    getContext: () => context,
+  } as unknown as HTMLCanvasElement;
 }
 function rampAlpha(t: number): number {
   return rampParts(t)[3];
@@ -1358,6 +1401,462 @@ section("Overlay legends");
   check("participant colours are all distinct", distinct.size === PARTICIPANT_COLOURS.length);
   check("the palette wraps rather than running out", participantColour(0) === participantColour(PARTICIPANT_COLOURS.length));
   check("participant colours carry alpha when asked", participantColour(0, 0.35).endsWith(", 0.35)"));
+}
+
+// --- One screen, one scope ------------------------------------------------
+
+section("The results screen states one scope, not three");
+{
+  /**
+   * The measured failure, reproduced as data: a five-recording study with one
+   * low-signal session auto-excluded, viewed in Scanpath. The header pill said
+   * "4 of 5 recordings", the rail said "Summary — P01", the region table under
+   * them printed the four-participant aggregate, all four scoped export rows
+   * said "4 of 5 recordings", and the PNG they produced held P01's path under a
+   * caption reading "All participants".
+   */
+  const solo: ReportedScope = {
+    participants: ["P01"],
+    total: 5,
+    perView: true,
+    flagged: 1,
+    excludingFlagged: true,
+  };
+  const picked: ReportedScope = { ...solo, participants: ["P02"], perView: false };
+  const aggregate: ReportedScope = {
+    participants: ["P01", "P02", "P03", "P05"],
+    total: 5,
+    perView: false,
+    flagged: 1,
+    excludingFlagged: true,
+  };
+  const included: ReportedScope = {
+    participants: ["P01", "P02", "P03", "P04", "P05"],
+    total: 5,
+    perView: false,
+    flagged: 1,
+    excludingFlagged: false,
+  };
+  const clean: ReportedScope = {
+    participants: ["P01", "P02"],
+    total: 2,
+    perView: false,
+    flagged: 0,
+    excludingFlagged: false,
+  };
+  const lone: ReportedScope = {
+    participants: ["P01"],
+    total: 1,
+    perView: false,
+    flagged: 0,
+    excludingFlagged: false,
+  };
+
+  /**
+   * How many recordings a sentence claims to describe, read back out of its own
+   * words. This is the assertion that matters: the four statements are written
+   * in four registers and are *meant* to differ in wording, so comparing them
+   * literally would only prove they are identical. Comparing what each one
+   * claims proves they agree.
+   */
+  const claimed = (text: string): number => {
+    const partial = text.match(/(\d+) of (\d+)/);
+    if (partial) return Number(partial[1]);
+    const all = text.match(/all (\d+) recording/i);
+    if (all) return Number(all[1]);
+    const bare = text.match(/^(\d+) recording/);
+    if (bare) return Number(bare[1]);
+    return NaN;
+  };
+
+  const worded = (scope: ReportedScope): string[] => [
+    scopePill(scope).text,
+    scopeSentence(scope),
+    scopeNote(scope),
+  ];
+
+  const cases: Array<[string, ReportedScope]> = [
+    ["a scanpath's one participant", solo],
+    ["a picked participant", picked],
+    ["the aggregate with a session excluded", aggregate],
+    ["the aggregate with every session included", included],
+    ["a study with nothing flagged", clean],
+    ["a study of one recording", lone],
+  ];
+
+  const disagreeing = cases.filter(([, scope]) =>
+    worded(scope).some((text) => claimed(text) !== scope.participants.length)
+  );
+  check(
+    "the pill, the menu row and the file note all count the same recordings",
+    disagreeing.length === 0,
+    disagreeing.map(([name, s]) => `${name}: ${worded(s).map(claimed).join("/")} vs ${s.participants.length}`).join("; ")
+  );
+
+  const mislabelled = cases.filter(
+    ([, scope]) =>
+      (scope.participants.length === 1 && scope.total > 1) !==
+      scopeCaption(scope).startsWith(scope.participants[0])
+  );
+  check(
+    "the exported PNG's caption names a participant exactly when the picture is one",
+    mislabelled.length === 0,
+    mislabelled.map(([name]) => name).join(", ")
+  );
+
+  // The four statements the critic read off one screen, now.
+  check(
+    "the header pill names the participant a per-person view is showing",
+    scopePill(solo).text === "P01 — 1 of 5 recordings",
+    scopePill(solo).text
+  );
+  check("the export rows say the same", scopeSentence(solo) === "P01 only — 1 of 5 recordings", scopeSentence(solo));
+  check("the PNG caption says the same", scopeCaption(solo) === "P01", scopeCaption(solo));
+  check(
+    "and the file note carries the reason the set is one person",
+    scopeNote(solo).includes("P01") && scopeNote(solo).includes("scanpath"),
+    scopeNote(solo)
+  );
+  // A participant picked from the dropdown is also one person, but not because
+  // of the view — so the file does not blame the scanpath for it.
+  check(
+    "a picked participant is not attributed to the view",
+    !scopeNote(picked).includes("scanpath") && scopeNote(picked).includes("P02"),
+    scopeNote(picked)
+  );
+
+  // The other direction: an aggregate must not put one person's name on
+  // anything, or the fix would have traded one wrong scope for another.
+  const named = [...worded(aggregate), scopeCaption(aggregate)].filter((text) =>
+    aggregate.participants.some((p) => text.includes(p))
+  );
+  check("an aggregate names no individual", named.length === 0, named.join(" | "));
+  check(
+    "the aggregate still says which sessions it dropped and why",
+    scopeNote(aggregate).includes("low-signal excluded") && scopeNote(aggregate).includes("1 below"),
+    scopeNote(aggregate)
+  );
+  check(
+    "a study with nothing to exclude just states its size",
+    scopePill(clean).text === "2 recordings" && scopeSentence(clean) === "all 2 recordings"
+  );
+  check("and a one-recording study is not described as a selection", scopeCaption(lone) === "All participants");
+}
+
+// --- The stage's ceiling --------------------------------------------------
+
+section("The stage ends where the legend that decodes it still fits");
+{
+  /**
+   * Measured at 1440×900 on a fresh open of a populated study: `--stage-cap`
+   * resolved to 614px and `.legend-slot` measured top 849 / bottom 963 — 63px
+   * past the fold, so the title strip was visible and the 0ms / 540ms / ≥1.1s
+   * ticks that make the picture readable were not. The legend is 114px tall on
+   * a 14px margin, which fixes the chrome above the stage at 221px.
+   */
+  const reference = { viewport: 900, above: 221, under: 114 + 14 };
+  const cap = stageCap(reference);
+  const legendBottom = reference.above + cap + reference.under;
+  check("the stage's ceiling leaves the legend its height", cap === 551, `${cap}px`);
+  check(
+    "the legend's bottom edge lands on the fold rather than past it",
+    legendBottom <= reference.viewport,
+    `bottom ${legendBottom} of ${reference.viewport}`
+  );
+
+  // The term that was wrong, restated: the rail asked for 614 and its bound —
+  // `min(fillsRow, viewport - above)` — let it through because the bound left
+  // out the very chrome the first term subtracts.
+  const previous = Math.max(cap, Math.min(614, reference.viewport - reference.above));
+  check(
+    "the 63px the old rail-slack bound overshot by are gone",
+    previous - cap === 63 && reference.above + previous + reference.under - reference.viewport === 63,
+    `was ${previous}px, now ${cap}px`
+  );
+
+  // And it is a property, not a lucky number: no combination of viewport,
+  // chrome and reserve may put the legend past the fold unless the stage is
+  // already at the floor its own stylesheet sets.
+  const offenders: string[] = [];
+  for (const viewport of [1080, 900, 800, 768, 700]) {
+    for (const above of [140, 190, 221, 300]) {
+      for (const under of [0, 90, 128, 176]) {
+        const c = stageCap({ viewport, above, under });
+        if (c === STAGE_MIN_HEIGHT) continue;
+        if (above + c + under > viewport) offenders.push(`${viewport}/${above}/${under}`);
+      }
+    }
+  }
+  check("no viewport puts the stage and its legend past the fold", offenders.length === 0, offenders.join(" "));
+  check(
+    "a window too short for either still gets the stage's declared minimum",
+    stageCap({ viewport: 650, above: 300, under: 176 }) === STAGE_MIN_HEIGHT
+  );
+}
+
+// --- Fit-width ------------------------------------------------------------
+
+section("The stage offers fit-width when the stimulus is starved of it");
+{
+  /**
+   * Sampled ten times at 80ms from first paint at each width, on a fresh load:
+   * `.stage-fit[aria-pressed]` was "false" in all forty samples while the
+   * settled ratios were all under the threshold the toggle exists to enforce.
+   */
+  const settled = [
+    { width: 1180, stage: 1098, figure: 687 },
+    { width: 1100, stage: 1018, figure: 687 },
+    { width: 1024, stage: 942, figure: 689 },
+  ];
+  const missed = settled.filter((s) => !shouldFitWidth(s.figure, s.stage));
+  check(
+    "every width the affordance was measured at is under its own threshold",
+    missed.length === 0,
+    settled.map((s) => `${s.width}: ${(s.figure / s.stage).toFixed(3)}`).join("  ")
+  );
+
+  /**
+   * Why it never fired. It ran on the line after the first `draw()`, and
+   * `draw()` is what fills the legend — so the cap it measured against had
+   * reserved nothing for a 114px legend, the height-bound figure was that much
+   * taller, and at the stimulus's 1.28 aspect ratio that is 146px wider. At
+   * 1180 the ratio it actually tested was 0.759 against a threshold of 0.75: it
+   * missed by seven thousandths of the number it was comparing against.
+   */
+  const preCap = settled[0].figure + 114 * 1.28;
+  check(
+    "the pre-legend measurement it used to take clears the threshold",
+    !shouldFitWidth(preCap, settled[0].stage),
+    `${(preCap / settled[0].stage).toFixed(3)} vs ${AUTO_FIT_RATIO}`
+  );
+  /**
+   * And what fixing the stage's ceiling does to this decision, which is the one
+   * place the two repairs touch. At 1440×900 the same 1280×1000 stimulus was
+   * 748px wide in a 944px scroller — 0.792, over the threshold, correctly left
+   * contained. With the cap honest at 551 the figure is 667px, and it now fires:
+   * the 113px of empty ground on each side of the artboard goes, at the cost of
+   * a stage that scrolls on Y with a visible clipped edge. One click undoes it.
+   */
+  const aspect = 748 / 584;
+  const figureAt = (cap: number): number => (cap - 30) * aspect;
+  check(
+    "the old ceiling left 1440×900 contained",
+    !shouldFitWidth(figureAt(614), 944),
+    `${(figureAt(614) / 944).toFixed(3)}`
+  );
+  check(
+    "and the honest one takes it below the threshold",
+    shouldFitWidth(figureAt(551), 944),
+    `${(figureAt(551) / 944).toFixed(3)}`
+  );
+  check("a figure that fills its stage is left contained", !shouldFitWidth(900, 944));
+  check("and a stage with no width yet decides nothing", !shouldFitWidth(687, 0));
+}
+
+// --- The heat kernel ------------------------------------------------------
+
+section("The heat kernel is the calibration error, not a constant");
+{
+  // σ is what the kernel means, and renderHeatmap takes σ as half the splat
+  // radius — so the derived ratio has to come back out as exactly the error
+  // that went in. That is the whole claim of the change.
+  const stimulus = 1000;
+  const sigmaFor = (errorPx: number | null): number =>
+    (kernelRatio(errorPx, stimulus) * stimulus) / 2;
+  check("a 60px calibration error blurs by 60px", Math.abs(sigmaFor(60) - 60) < 0.5, `${sigmaFor(60).toFixed(1)}px`);
+  check(
+    "two recordings with different error do not get the same blob",
+    kernelRatio(48, stimulus) !== kernelRatio(184, stimulus),
+    `${kernelRatio(48, stimulus).toFixed(3)} vs ${kernelRatio(184, stimulus).toFixed(3)}`
+  );
+  // The app's own setup panel says gaze lands within "2 to 4 degrees of visual
+  // angle, which is 50 to 120 pixels". The constant drew σ = 28px on this
+  // stimulus: half the floor of the uncertainty the tool states about itself,
+  // three inches from a rail printing the measured value per selection.
+  check(
+    "the constant it replaces sat under the app's own stated uncertainty",
+    (DEFAULT_KERNEL_RATIO * stimulus) / 2 < MIN_KERNEL_SIGMA_PX,
+    `σ ${((DEFAULT_KERNEL_RATIO * stimulus) / 2).toFixed(0)}px against a stated floor of ${MIN_KERNEL_SIGMA_PX}px`
+  );
+  const outside = [0, 10, 48, 60, 100, 150, 184, 400, null].filter((error) => {
+    const sigma = sigmaFor(error);
+    return sigma < MIN_KERNEL_SIGMA_PX - 0.5 || sigma > MAX_KERNEL_SIGMA_PX + 0.5;
+  });
+  check(
+    "every kernel it draws sits inside that band",
+    outside.length === 0,
+    outside.map((error) => `${error}px → σ ${sigmaFor(error).toFixed(0)}px`).join(", ")
+  );
+  check(
+    "an unmeasured calibration takes the band's floor rather than a finer guess",
+    sigmaFor(null) === MIN_KERNEL_SIGMA_PX
+  );
+  check(
+    "with no stimulus rect to measure against, the old constant still stands in",
+    kernelRatio(60, 0) === DEFAULT_KERNEL_RATIO
+  );
+  check(
+    "and on a small stimulus the blob is capped at a fraction of the picture",
+    kernelRatio(120, 300) === MAX_KERNEL_RATIO,
+    `${kernelRatio(120, 300)}`
+  );
+
+  /**
+   * What that is worth on the picture. The critic measured a 27-fixation study
+   * rendering 5.5% of the overlay with any paint at all and 0.44% past half
+   * alpha — pinpricks, where the evidence this tool claims to produce is
+   * component-scale. Below is the same shape of study — 27 fixations over three
+   * clusters, the way a task-driven session actually lands — pushed through the
+   * real renderer onto a stub canvas.
+   */
+  const clusters = [
+    { x: 0.3, y: 0.2 },
+    { x: 0.68, y: 0.44 },
+    { x: 0.4, y: 0.78 },
+  ];
+  const points = Array.from({ length: 27 }, (_, i) => {
+    const centre = clusters[i % clusters.length];
+    return {
+      x: centre.x + (((i * 37) % 11) - 5) * 0.012,
+      y: centre.y + (((i * 23) % 9) - 4) * 0.014,
+      weight: 200 + (i % 5) * 180,
+    };
+  });
+  const coverage = (ratio: number): { any: number; strong: number } => {
+    const canvas = stubCanvas(320, 250);
+    renderHeatmap(canvas, points, { style: "heat", radiusRatio: ratio });
+    const pixels = (canvas as unknown as { pixels: Uint8ClampedArray }).pixels;
+    let any = 0;
+    let strong = 0;
+    for (let i = 3; i < pixels.length; i += 4) {
+      if (pixels[i] > 0) any++;
+      if (pixels[i] > 127) strong++;
+    }
+    const total = pixels.length / 4;
+    return { any: any / total, strong: strong / total };
+  };
+  const before = coverage(DEFAULT_KERNEL_RATIO);
+  const after = coverage(kernelRatio(60, stimulus));
+  check(
+    "a measured kernel paints the evidence at component scale",
+    after.any > before.any * 2,
+    `any paint ${(before.any * 100).toFixed(1)}% → ${(after.any * 100).toFixed(1)}%`
+  );
+  check(
+    "and it stays a finding rather than becoming a wash",
+    after.any < 0.6,
+    `${(after.any * 100).toFixed(1)}% of the overlay painted`
+  );
+
+  // A kernel is a parameter, not a fact, so the picture states the one it was
+  // drawn at — the way Tobii Pro Lab states its own. In both units: degrees are
+  // the comparable one, pixels are the one visible on the image.
+  const keyed = legendFor("heat", ["P01"], { ceiling: 1240, blur: { degrees: 1.5, pixels: 60 } });
+  check("the legend states the kernel the field was blurred at", keyed.caption.includes("Blur ≈1.5° (60px)"), keyed.caption);
+  check(
+    "and saying so keeps the caption a caption",
+    keyed.caption.split(/\s+/).length <= 14,
+    `${keyed.caption.split(/\s+/).length} words`
+  );
+  check(
+    "a scale with no measured blur says nothing about one",
+    !legendFor("heat", ["P01"], { ceiling: 1240 }).caption.includes("Blur")
+  );
+}
+
+// --- Scanpath ordinals ----------------------------------------------------
+
+section("A fixation's number survives the circle it is drawn on");
+{
+  /**
+   * The circle as it actually lands: the ramp at 55% over whatever the stimulus
+   * has there. Four grounds a wireframe really contains, because the renderer
+   * draws on a transparent overlay and cannot sample the picture underneath —
+   * which is the whole reason the numeral cannot pick its fill from the ramp.
+   */
+  const grounds: Array<[string, [number, number, number]]> = [
+    ["white wireframe", [255, 255, 255]],
+    ["cream card", [238, 232, 216]],
+    ["dark teal bar", [13, 74, 82]],
+    ["near-black bar", [24, 37, 41]],
+  ];
+  const channel = (v: number): number => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const luminance = ([r, g, b]: number[]): number =>
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  const ratio = (a: number, b: number): number =>
+    (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  const rgbOf = (colour: string): number[] =>
+    colour.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+  const over = (fg: number[], alpha: number, bg: number[]): number[] =>
+    fg.map((v, i) => v * alpha + bg[i] * (1 - alpha));
+
+  const disc = (t: number, ground: number[]): number =>
+    luminance(over(rgbOf(scanpathColour(t)), CIRCLE_ALPHA, ground));
+  const ink = luminance(rgbOf("rgba(255,255,255,1)"));
+  const casing = luminance(rgbOf(ORDINAL_HALO));
+  const wash = (t: number, ground: number[]): number =>
+    luminance(over(rgbOf(ORDINAL_HALO), 0.75, over(rgbOf(scanpathColour(t)), CIRCLE_ALPHA, ground)));
+
+  const samples = Array.from({ length: 21 }, (_, i) => i / 20);
+
+  // The measured failure: white on the pale end of viridis over a white
+  // wireframe. It is real, and it is why the numeral cannot be read from its
+  // fill alone.
+  check(
+    "a white numeral has no contrast at all on the light end of the ramp",
+    ratio(disc(1, [255, 255, 255]), ink) < 1.3,
+    `${ratio(disc(1, [255, 255, 255]), ink).toFixed(2)}:1 over a white wireframe`
+  );
+  // And why picking the ink from the ramp instead does not fix it: the same
+  // late circle over a dark nav bar is the other way round.
+  check(
+    "and the same circle over a dark bar is the opposite problem",
+    ratio(disc(1, [13, 74, 82]), ink) > 2.5,
+    `${ratio(disc(1, [13, 74, 82]), ink).toFixed(2)}:1 over a dark teal bar`
+  );
+
+  // So the numeral is read from its casing, and the pair has to separate on
+  // every ground: either the fill or the casing carries it.
+  let worstNow = Infinity;
+  let worstBefore = Infinity;
+  let where = "";
+  for (const t of samples) {
+    for (const [name, ground] of grounds) {
+      const level = disc(t, ground);
+      const now = Math.max(ratio(level, ink), ratio(level, casing));
+      const before = Math.max(ratio(level, ink), ratio(level, wash(t, ground)));
+      if (now < worstNow) {
+        worstNow = now;
+        where = `${name} at t=${t.toFixed(2)}`;
+      }
+      worstBefore = Math.min(worstBefore, before);
+    }
+  }
+  check(
+    "either the numeral or its casing clears 4:1 on every ground, everywhere on the ramp",
+    worstNow >= 4,
+    `worst ${worstNow.toFixed(2)}:1 — ${where}`
+  );
+  check(
+    "an opaque casing beats the 75% wash it replaces",
+    worstNow > worstBefore,
+    `worst case ${worstBefore.toFixed(2)}:1 → ${worstNow.toFixed(2)}:1`
+  );
+  const regressions = samples.flatMap((t) =>
+    grounds.filter(([, ground]) => {
+      const level = disc(t, ground);
+      return ratio(level, casing) < ratio(level, wash(t, ground)) - 1e-9;
+    })
+  );
+  check("and it is not worse anywhere", regressions.length === 0, `${regressions.length} cases`);
+  check(
+    "the pale end of the ramp gains the most, which is where the failure was",
+    ratio(disc(1, [255, 255, 255]), casing) > 15,
+    `${ratio(disc(1, [255, 255, 255]), wash(1, [255, 255, 255])).toFixed(1)}:1 → ${ratio(disc(1, [255, 255, 255]), casing).toFixed(1)}:1`
+  );
 }
 
 // --- Result --------------------------------------------------------------

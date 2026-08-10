@@ -58,6 +58,33 @@ export function scanpathColour(t: number, alpha = 1, lightness = 55): string {
   return `rgba(${channel(a[0], b[0])}, ${channel(a[1], b[1])}, ${channel(a[2], b[2])}, ${alpha})`;
 }
 
+/** How solid a fixation circle's fill is. Named because the ordinal drawn on
+ * top of it has to be legible against whatever this composites to. */
+export const CIRCLE_ALPHA = 0.55;
+
+/**
+ * The numeral, and the casing that makes it readable on an unknown ground.
+ *
+ * The fill cannot be chosen from the ramp, and that is worth recording because
+ * it looks like it should be. Viridis runs dark to light by design, so a white
+ * numeral on its light end composites to 1.15:1 over a white wireframe — which
+ * is what makes ordinals 4 and 5 of a short path read as scratches. But the
+ * circle is 55% opaque over a stimulus this renderer cannot see: it draws on a
+ * transparent overlay above the image, so it has no pixels to sample. Measured
+ * over four grounds a wireframe actually contains, the same late circle sitting
+ * on a dark nav bar is 2.9:1 the other way — flipping the ink by ramp position
+ * takes that case from 5.3:1 to 3.4:1. There is no ground-independent fill.
+ *
+ * So the numeral is read from its casing, the way a map label is, and the casing
+ * is opaque rather than a 75% wash. That is strictly better on every ground and
+ * every point of the ramp — over a white wireframe at the light end it goes from
+ * 7.9:1 to 16.4:1 — and it lifts the worst case of "either the fill or the
+ * casing separates" from 3.8:1 to 4.6:1. The width is still capped by
+ * MAX_ORDINAL_HALO_PX, which is what keeps the counters open at the floor size.
+ */
+export const ORDINAL_INK = "#ffffff";
+export const ORDINAL_HALO = "rgb(12, 18, 24)";
+
 export interface ScanpathOptions {
   /** Radius in pixels for the shortest fixation. */
   minRadius?: number;
@@ -448,14 +475,27 @@ export function renderScanpath(
   ctx.strokeStyle = "rgba(20,26,38,0.8)";
   ctx.stroke(saccades);
 
+  // Fills first, then every rim over every fill.
+  //
+  // Drawn as one pass per circle, a later fixation's translucent disc was
+  // painted straight over the rim of the one before it, so a cluster of
+  // overlapping fixations — which is the normal case wherever attention
+  // actually landed — merged into a single blob with only the last circle's
+  // outline surviving. Measured on the 5-fixation crop: 4 and 5 sat inside 3
+  // with no boundary of their own. Rims last costs nothing and keeps every
+  // fixation individually citable, without moving any circle off the position
+  // it was measured at — which is what a dodging pass would have done.
   for (const c of circles) {
-    ctx.fillStyle = scanpathColour(c.t, 0.55);
-    ctx.strokeStyle = scanpathColour(c.t, 0.95, 40);
-    ctx.lineWidth = 2 * scale;
-
+    ctx.fillStyle = scanpathColour(c.t, CIRCLE_ALPHA);
     ctx.beginPath();
     ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.lineWidth = 2 * scale;
+  for (const c of circles) {
+    ctx.strokeStyle = scanpathColour(c.t, 0.95, 40);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
     ctx.stroke();
   }
 
@@ -504,18 +544,19 @@ export function renderScanpath(
     // The same family as the rest of the UI: canvas text in the system stack
     // renders in a visibly different typeface from every label around it.
     //
-    // The halo is a fraction of the glyph, capped: it exists to separate a
-    // white numeral from whatever is under it, and past MAX_ORDINAL_HALO_PX it
-    // starts closing the counters instead — which is how "large white numeral,
-    // dark halo" rendered on screen as a small dark-grey one.
+    // The halo is a fraction of the glyph, capped: it exists to separate the
+    // numeral from whatever is under it, and past MAX_ORDINAL_HALO_PX it starts
+    // closing the counters instead — which is how "large white numeral, dark
+    // halo" rendered on screen as a small dark-grey one. See ORDINAL_HALO for
+    // why the casing rather than the fill is what carries the numeral.
     ctx.font = `700 ${spot.fontSize}px ${CANVAS_FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
     ctx.lineWidth = Math.min(spot.fontSize * 0.22, MAX_ORDINAL_HALO_PX * scale);
-    ctx.strokeStyle = "rgba(12,18,24,0.75)";
+    ctx.strokeStyle = ORDINAL_HALO;
     ctx.strokeText(text, spot.x, spot.y);
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = ORDINAL_INK;
     ctx.fillText(text, spot.x, spot.y);
   }
 }

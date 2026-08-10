@@ -41,6 +41,68 @@ export interface HeatmapOptions {
 }
 
 /**
+ * The splat radius to fall back to when there is no stimulus rect to measure
+ * against. It is what every heatmap on this screen used to be drawn at,
+ * whatever the recordings said.
+ */
+export const DEFAULT_KERNEL_RATIO = 0.055;
+
+/**
+ * The band the app states about its own instrument, in the participant's screen
+ * pixels: the setup panel and the bench note both say webcam gaze lands within
+ * "2 to 4 degrees of visual angle, which is 50 to 120 pixels".
+ *
+ * The kernel is held inside it. Below the floor the picture claims a precision
+ * the technique does not have — which is exactly what the old constant did, at
+ * σ = 27px on a 1000px stimulus, less than half the floor of the app's own
+ * sentence. Above the ceiling the recording is not localising at all, and the
+ * honest response to that is the low-signal exclusion rather than a blob the
+ * size of the page.
+ */
+export const MIN_KERNEL_SIGMA_PX = 50;
+export const MAX_KERNEL_SIGMA_PX = 120;
+
+/** A backstop in the stimulus's own terms: on a small stimulus even a floor-of-
+ * the-band kernel can be most of the picture, and a single blob covering a third
+ * of the screen has stopped being a measurement of anything. */
+export const MAX_KERNEL_RATIO = 0.3;
+
+/**
+ * The blur to draw attention at, derived from how far off the gaze actually was.
+ *
+ * The ratio was a hard-coded 0.055 — 55 stimulus px on a 1280×1000 wireframe,
+ * σ = 27px — applied identically to a recording that validated at 48px of error
+ * and one that validated at 184px, while the rail three inches from the picture
+ * printed that very number per selection. The app's own setup panel says gaze
+ * lands within "2 to 4 degrees of visual angle, which is 50 to 120 pixels", so
+ * the fixed kernel was drawing at less than half the floor of the uncertainty
+ * the tool itself states. The measured effect on a 27-fixation study: 5.5% of
+ * the overlay carried any paint at all and 0.44% passed half alpha — pinpricks
+ * where the evidence is component-scale.
+ *
+ * σ is set to the measured error, so the blob covers the region the gaze could
+ * plausibly have been in, one standard deviation out. `renderHeatmap` takes σ as
+ * half the splat radius, hence the factor of two. Tobii Pro Lab expresses the
+ * same idea in degrees of visual angle and lets you set it; this app knows the
+ * degrees and, until now, ignored them.
+ *
+ * `errorPx` and `stimulusMinDim` are both in the participant's own CSS pixels —
+ * the error as validation measured it, the dimension as the stimulus was
+ * displayed — so their ratio is a property of the picture and not of the screen
+ * it is being reviewed on. An unmeasured calibration takes the floor of the
+ * stated band rather than the old constant: not knowing how far off a recording
+ * was is not evidence that it was far off, but it is no reason to draw it finer
+ * than the technique resolves either.
+ */
+export function kernelRatio(errorPx: number | null, stimulusMinDim: number): number {
+  if (!Number.isFinite(stimulusMinDim) || stimulusMinDim <= 0) return DEFAULT_KERNEL_RATIO;
+  const measured =
+    errorPx !== null && Number.isFinite(errorPx) && errorPx > 0 ? errorPx : MIN_KERNEL_SIGMA_PX;
+  const sigma = Math.min(MAX_KERNEL_SIGMA_PX, Math.max(MIN_KERNEL_SIGMA_PX, measured));
+  return Math.min(MAX_KERNEL_RATIO, (2 * sigma) / stimulusMinDim);
+}
+
+/**
  * The attention ramp: [position, r, g, b, alpha].
  *
  * This used to run blue → cyan → green → yellow → red and call itself "the

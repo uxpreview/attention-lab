@@ -3154,6 +3154,18 @@ p {
   margin-bottom: 0;
 }
 
+/* Who the region table is counting, stated on the table.
+ *
+ * The table used to carry no scope at all, which is how it came to print the
+ * four-participant aggregate under a screen that everywhere else said "P01" —
+ * and it is the block most likely to be screenshotted on its own, where there is
+ * no pill and no rail beside it to reconcile against. Same sentence the export
+ * menu prints under each file's name. */
+.table-scope {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -3266,15 +3278,39 @@ p {
  * reading. Still anchored right, so the bars end on the line the numbers align
  * to and the comparison stays one reading rather than two; still nothing at all
  * for a zero, because a sliver at the margin would read as "a little" rather
- * than "none". */
+ * than "none".
+ *
+ * Two things it got wrong, both measured at 1440×900 on a six-region table.
+ *
+ * The bar ran to the cell's own edges (`inset: 3px 0 3px auto`), so on the
+ * heaviest row the Seen bar ended at x=495 and the Dwell bar began at x=495: a
+ * measured 0px gap, which draws as one unbroken 210px block spanning two columns
+ * whose units are percent and milliseconds. The gutter below is what stops two
+ * adjacent quantities being read as one — 8px of it on each side, so the gap
+ * between neighbouring bars can never be less than 16px.
+ *
+ * And a bar with nothing behind it has no scale to be a fraction of: the Dwell
+ * figures for Nav, Hero and Footer drew at 15, 17 and 9px inside 108px cells,
+ * out past a right-aligned numeral, reading as stray nubs rather than as small
+ * quantities — half the rows in the table. The track is the missing half of the
+ * mark. At 4% of the accent it is barely ink at all, which is the point: it says
+ * "this is the full width" and nothing else. An empty track is also the honest
+ * drawing of a zero, which is why the "no bar at all" rule now applies to the
+ * fill and not to the track. */
+.cell-track {
+  position: absolute;
+  inset: 3px 8px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  z-index: 0;
+}
 .cell-bar {
   position: absolute;
-  inset: 3px 0 3px auto;
+  inset: 0 0 0 auto;
   width: calc(var(--v, 0) * 100%);
   min-width: 3px;
   border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  z-index: 0;
 }
 .data-table .col-action {
   width: 1%;
@@ -3955,6 +3991,7 @@ abbr[title] {
   .data-table .cell-measure .cell-value {
     display: inline;
   }
+  .data-table .cell-track,
   .data-table .cell-bar {
     display: none;
   }
@@ -4060,17 +4097,43 @@ abbr[title] {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   padding: 10px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--edge);
+}
+/* What the expanded figure covers: the study, and who is in it. It is the one
+   line that makes the screenshot people take from here citable — the bar
+   otherwise held nothing but a Close button. It owns the bar's free space, so
+   the hint and Close stay together at the right. */
+.lightbox-scope {
+  margin: 0;
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--body-2);
+}
+/* The legend, as the dialog's last row rather than a thing left behind in the
+   column. It is the same element the stage uses — moved, not copied — so the
+   full-screen figure cannot be keyed to a different scale from the one that was
+   on screen a moment ago. Capped, because a raw-gaze key with eight
+   participants must not eat the picture it explains. */
+.figure-lightbox > .legend-slot {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 12px 12px;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 /* Only shown where rotating is a thing someone can do — see canRotate() in
    ui/results.ts. On --body-2 rather than --muted: it was 3.94:1 at 12px, under
    AA, which is not a standard a hint gets to opt out of. */
 .lightbox-hint {
   margin: 0;
-  margin-right: auto;
   font-size: 12.5px;
   color: var(--body-2);
 }

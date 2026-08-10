@@ -94,6 +94,34 @@ export interface LegendTick {
 export interface LegendScale {
   /** Field units at the hot end of the ramp; the cold end is always 0. */
   ceiling: number;
+  /** How much the field was blurred, when the blur was derived from the
+   * selection's own calibration error rather than assumed. */
+  blur?: LegendBlur | null;
+}
+
+/**
+ * The kernel the attention field was splatted with, as drawn.
+ *
+ * Printed because a heatmap's blur is a parameter, not a fact: two tools drawing
+ * the same fixations at different kernels produce differently-shaped findings,
+ * and this one now derives it per selection from the measured calibration error
+ * (see kernelRatio in heatmap.ts). Tobii Pro Lab states its kernel in degrees of
+ * visual angle for the same reason. Both units, because degrees are the
+ * comparable one and pixels are the one a reader can see on the picture.
+ */
+export interface LegendBlur {
+  /** One standard deviation of the splat, in degrees of visual angle. */
+  degrees: number;
+  /** The same, in the participant's own screen pixels. */
+  pixels: number;
+}
+
+/** The blur clause appended to a caption, or nothing when the kernel was not
+ * derived from a measurement. Kept to three words so the caption stays a
+ * caption. */
+function blurClause(scale: LegendScale | null): string {
+  if (!scale?.blur) return "";
+  return ` Blur ≈${scale.blur.degrees.toFixed(1)}° (${Math.round(scale.blur.pixels)}px).`;
 }
 
 /** Rounds to something a person would read off an axis, in the same units the
@@ -183,7 +211,7 @@ export function legendFor(
         maxLabel: "Most looked at",
         ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
-        caption: "Total fixation time per area, scaled to this selection.",
+        caption: `Total fixation time per area, scaled to this selection.${blurClause(scale)}`,
         // The percentile named here is the one renderHeatmap actually defaults
         // to, and it is a percentile of the per-blob peaks rather than of the
         // pixels — see fieldCeiling. It said "98th" for a clamp that no longer
@@ -201,7 +229,7 @@ export function legendFor(
         // same ticks name them.
         ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
-        caption: "The heatmap's scale, quantised into bands you can cite.",
+        caption: `The heatmap's scale, quantised into bands you can cite.${blurClause(scale)}`,
         note: "The same fixation-duration scale as the heatmap, quantised into equal bands so a region can be cited by band. Below the first band is left clear.",
       };
     case "spotlight":
@@ -220,7 +248,7 @@ export function legendFor(
         // does not encode.
         ticks: null,
         swatches: null,
-        caption: "The stimulus dimmed everywhere except where fixations landed.",
+        caption: `The stimulus dimmed everywhere except where fixations landed.${blurClause(scale)}`,
         note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed, and a fully revealed area is the stimulus at full strength — never brighter. The dim stops short of black, so the rest of the screen stays legible as context rather than disappearing. Reveal is boosted, so a moderately-attended region clears.",
       };
     case "scanpath":
