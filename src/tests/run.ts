@@ -19,7 +19,13 @@ import {
 } from "../analysis/heatmap";
 import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
-import { layoutOrdinals, type OrdinalLabel } from "../analysis/scanpath";
+import {
+  layoutOrdinals,
+  ORDINAL_BUDGET,
+  scanpathColour,
+  selectOrdinals,
+  type OrdinalLabel,
+} from "../analysis/scanpath";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
 import {
   chromeCanContaminate,
@@ -961,6 +967,66 @@ section("Scanpath ordinal placement");
     "without bounds nothing is clamped",
     layoutOrdinals([{ x: -50, y: -50, radius: 20 }])[0].x === -50
   );
+  // A subset of a path still has to say where in the *whole* path each circle
+  // sits, so the printed number comes from the circle rather than its position
+  // in the array handed to the layout pass.
+  const renumbered = layoutOrdinals([{ x: 100, y: 100, radius: 20, ordinal: 42 }]);
+  check("a stated ordinal is what gets measured", renumbered[0].halfWidth > 0);
+}
+
+// --- Scanpath thinning and ramp -------------------------------------------
+
+section("Scanpath ordinals and ramp");
+{
+  // Under the budget nothing is dropped: thinning is a response to density, not
+  // a fixed cap on how much of a path can be numbered.
+  const short = selectOrdinals([100, 200, 300]);
+  check("a short path keeps every ordinal", short.length === 3 && short[2] === 2);
+
+  // 40 fixations, with the longest ones deliberately not at the ends.
+  const durations = Array.from({ length: 40 }, (_, i) => 100 + (i % 8) * 50);
+  const kept = selectOrdinals(durations);
+  check("a dense path is thinned to the budget", kept.length === ORDINAL_BUDGET, `${kept.length}`);
+  check("the thinned ordinals stay in sequence order", kept.every((v, i) => i === 0 || v > kept[i - 1]));
+  // Where a path starts and where it ends are the two facts a reader looks for
+  // first, whatever those two fixations happened to be worth.
+  check(
+    "the first and last fixations always keep their number",
+    kept[0] === 0 && kept[kept.length - 1] === durations.length - 1
+  );
+  // Duration is what makes a fixation worth citing, and the circles are already
+  // sized by it — so the surviving numbers land on the marks a reader is
+  // already looking at.
+  const middle = kept.filter((i) => i !== 0 && i !== durations.length - 1);
+  const dropped = durations.map((_, i) => i).filter((i) => !kept.includes(i));
+  const shortestKept = Math.min(...middle.map((i) => durations[i]));
+  const longestDropped = Math.max(...dropped.map((i) => durations[i]));
+  check(
+    "the surviving ordinals are the longest fixations",
+    shortestKept >= longestDropped,
+    `kept ≥ ${shortestKept}ms, dropped ≤ ${longestDropped}ms`
+  );
+
+  // The rainbow this replaced was flagged for exactly this: hue carries no
+  // order, so first-to-last only reads if the ramp climbs in lightness. That
+  // also makes it survive greyscale and colour vision deficiency.
+  const luminance = (colour: string): number => {
+    const [r, g, b] = colour.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ramp = Array.from({ length: 9 }, (_, i) => luminance(scanpathColour(i / 8)));
+  check(
+    "the order ramp climbs in lightness at every step",
+    ramp.every((v, i) => i === 0 || v > ramp[i - 1]),
+    ramp.map((v) => Math.round(v)).join(" → ")
+  );
+  // The rim drawn around each circle is the same colour, darker — the parameter
+  // kept its old HSL-percentage meaning through the ramp change.
+  check(
+    "a lower lightness darkens the same colour",
+    luminance(scanpathColour(0.7, 1, 40)) < luminance(scanpathColour(0.7, 1, 55))
+  );
+  check("the ramp carries the alpha it is asked for", scanpathColour(0.5, 0.85).endsWith(", 0.85)"));
 }
 
 // --- Legends -------------------------------------------------------------

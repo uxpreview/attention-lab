@@ -18,7 +18,7 @@ Six recordings against one task, aggregated — then the same data as a
 spotlight, which dims what nobody looked at, and as one participant's scanpath,
 numbered in reading order and sized by dwell:
 
-![Left: the same wireframe under the spotlight view, everything but the attended regions dimmed. Right: a numbered scanpath, circles joined by saccade lines, running cool to warm over time.](docs/figures/spotlight-scanpath.png)
+![Left: the same wireframe under the spotlight view, everything but the attended regions dimmed. Right: a numbered scanpath, circles joined by saccade lines, running dark to light over time.](docs/figures/spotlight-scanpath.png)
 
 The session behind those figures is synthetic, and they are drawn by the app's
 own renderers running headlessly — `npm run figures` regenerates them. So the
@@ -87,8 +87,10 @@ rendered empty; what is verified and what is not; and what is still open.
 - **Spotlight** — the inverse: dims what was ignored. Usually the more
   persuasive version in a readout.
 - **Contours** — banded isolines, easier to cite exact regions from.
-- **Scanpath** — numbered fixations sized by dwell, in reading order. Per
-  participant, since an averaged scanpath is meaningless.
+- **Scanpath** — numbered fixations sized by dwell, in reading order, on a
+  viridis ramp so first-to-last reads as an ordering in greyscale and under
+  colour vision deficiency. Per participant, since an averaged scanpath is
+  meaningless.
 - **Areas of interest** — draw boxes on the stimulus and get hit rate, dwell
   time, and time-to-first-fixation per region, aggregated across participants.
 - **Exports** — PNG overlay at the stimulus's native resolution, plus raw gaze,

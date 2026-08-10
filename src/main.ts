@@ -484,7 +484,15 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
       // Where a session cannot run the button is disabled rather than hidden: a
       // control that vanishes leaves you wondering whether the tool is broken,
       // and the title says which of the two reasons applies.
-      runSessionButton(study),
+      // Filled only where the work is still to be done. A list of three studies
+      // used to render three filled teal "Run session" pills — three competing
+      // primaries on one screen, against the rule stated on .btn-primary that
+      // there is one — and it ranked them wrongly: on a study with five
+      // recordings the loud button was Run session while Results, the one with
+      // data behind it, was a quiet outline, and a study with nothing in it got
+      // exactly the same loud treatment. Emphasis now tracks the state of the
+      // study: run it, then read it.
+      runSessionButton(study, stats.count === 0),
       // Softened rather than disabled at zero: there is nothing to read yet,
       // but the results screen is also where regions are drawn, and a study
       // can usefully be marked up before the first participant sits down — the
@@ -493,7 +501,7 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
       el(
         "button",
         {
-          class: stats.count > 0 ? "btn" : "btn btn-ghost",
+          class: stats.count > 0 ? "btn btn-primary" : "btn btn-ghost",
           type: "button",
           title: stats.count > 0 ? null : "No recordings yet — regions can still be drawn",
           onclick: () => void openResults(study),
@@ -519,11 +527,14 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
   );
 }
 
-function runSessionButton(study: Study): HTMLButtonElement {
+/** `primary` is the study's own state, not a style choice: a study with no
+ * recordings has exactly one thing worth doing, and a study with recordings has
+ * a different one. See the note at the call site. */
+function runSessionButton(study: Study, primary: boolean): HTMLButtonElement {
   const btn = el(
     "button",
     {
-      class: "btn btn-primary",
+      class: primary ? "btn btn-primary" : "btn",
       type: "button",
       // Re-checked at click time rather than trusted from render time: the
       // window can be resized between the two.

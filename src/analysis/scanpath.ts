@@ -11,12 +11,51 @@ import type { Fixation } from "./fixations";
  * typeface from every label around them. */
 export const CANVAS_FONT_FAMILY = '"Figtree", ui-sans-serif, system-ui, sans-serif';
 
-/** Early (cool) to late (warm), the same mapping the legend draws. `t` is the
- * fixation's position in the sequence, 0 to 1. */
+/**
+ * The order ramp: first to last, dark to light.
+ *
+ * This was `hsl(210 - t*210)` — a blue → cyan → green → yellow → red sweep.
+ * A rainbow ramp is the one scale a data-literate reviewer will flag on sight:
+ * hue carries no intrinsic order, so a reader cannot tell whether green comes
+ * before or after yellow without consulting the key, the perceived brightness
+ * jumps around inside it, and it collapses under deuteranopia and in greyscale
+ * — which sat oddly beside this app's deliberate Okabe-Ito participant colours
+ * and its deliberate rejection of the jet ramp for heat.
+ *
+ * Viridis instead: monotonically increasing in lightness, so first → last
+ * survives a greyscale print and every common form of colour vision deficiency,
+ * and reads as an ordering even with the legend covered up. Anchors are the
+ * standard nine stops of the matplotlib ramp, interpolated in sRGB — close
+ * enough to the true perceptual path at this sample count that the difference
+ * is invisible, and it keeps this file free of a colour-space dependency.
+ */
+const VIRIDIS: Array<[number, number, number]> = [
+  [68, 1, 84],
+  [72, 40, 120],
+  [62, 73, 137],
+  [49, 104, 142],
+  [38, 130, 142],
+  [31, 158, 137],
+  [53, 183, 121],
+  [110, 206, 88],
+  [253, 231, 37],
+];
+
+/** Early (dark) to late (light), the same mapping the legend draws. `t` is the
+ * fixation's position in the sequence, 0 to 1. `lightness` keeps the meaning it
+ * had as an HSL percentage: 55 is the ramp as sampled, and lower values darken
+ * it for the rim drawn around each circle's fill. */
 export function scanpathColour(t: number, alpha = 1, lightness = 55): string {
   const clamped = Math.max(0, Math.min(1, t));
-  const hue = 210 - clamped * 210;
-  return `hsla(${hue}, 85%, ${lightness}%, ${alpha})`;
+  const pos = clamped * (VIRIDIS.length - 1);
+  const i = Math.min(VIRIDIS.length - 2, Math.floor(pos));
+  const f = pos - i;
+  const a = VIRIDIS[i];
+  const b = VIRIDIS[i + 1];
+  const shade = lightness / 55;
+  const channel = (lo: number, hi: number): number =>
+    Math.max(0, Math.min(255, Math.round((lo + (hi - lo) * f) * shade)));
+  return `rgba(${channel(a[0], b[0])}, ${channel(a[1], b[1])}, ${channel(a[2], b[2])}, ${alpha})`;
 }
 
 export interface ScanpathOptions {
@@ -41,6 +80,10 @@ export interface OrdinalCircle {
   x: number;
   y: number;
   radius: number;
+  /** The number to print. Defaults to the circle's index + 1; stated only when
+   * a subset of the path is being numbered and the ordinals still have to
+   * refer to positions in the whole sequence. */
+  ordinal?: number;
 }
 
 export interface OrdinalLabel {
@@ -133,7 +176,7 @@ export function layoutOrdinals(
 
   for (let i = 0; i < circles.length; i++) {
     const c = circles[i];
-    const text = String(i + 1);
+    const text = String(c.ordinal ?? i + 1);
     const centreFont = Math.max(
       MIN_ORDINAL_PX * scale,
       Math.min(MAX_ORDINAL_PX * scale, c.radius * 0.85)
@@ -213,6 +256,53 @@ export function layoutOrdinals(
   }
 
   return out;
+}
+
+/** How many displaced labels a picture can carry before numbering every
+ * fixation stops communicating the order it exists to communicate. Below this,
+ * leader lines are a handful of tidy callouts; above it they are a thicket. */
+export const MAX_DISPLACED_ORDINALS = 20;
+
+/** How many ordinals survive the thinning. Twenty numbers is already more than
+ * a reader will trace in order; the point of the cut is that the ones that
+ * remain are readable. */
+export const ORDINAL_BUDGET = 16;
+
+/**
+ * Which fixations keep their number when the path is too dense to number all of
+ * them.
+ *
+ * With 67 fixations over six clusters every circle's ordinal is displaced, and
+ * the satellites pile into each other around the spots — "53, 28, 29, 31, 3, 30,
+ * 54" orbiting the first two circles with their leader lines crossing. The
+ * ordering, which is the only thing a scanpath says, then survives only for the
+ * few numbers that happened to land inside a circle.
+ *
+ * So the longest fixations keep their ordinals — duration is what makes a
+ * fixation worth citing, and the circles are already sized by it, so the
+ * numbers land on the marks a reader is looking at anyway. The first and last
+ * are always kept whatever their duration: where the path starts and where it
+ * ends are the two facts a reader looks for first.
+ *
+ * Returns indices into the original sequence, in sequence order. Pure and
+ * exported because this is the part worth testing.
+ */
+export function selectOrdinals(durations: number[], budget = ORDINAL_BUDGET): number[] {
+  if (durations.length <= budget) return durations.map((_, i) => i);
+
+  const keep = new Set<number>([0, durations.length - 1]);
+  const byDuration = durations
+    .map((duration, index) => ({ duration, index }))
+    // Longest first; ties break toward the earlier fixation so the selection is
+    // deterministic and leans toward the start of the path.
+    .sort((a, b) => b.duration - a.duration || a.index - b.index);
+
+  for (const { index } of byDuration) {
+    if (keep.size >= budget) break;
+    keep.add(index);
+  }
+
+  return [...keep].sort((a, b) => a - b);
 }
 
 export function renderScanpath(
@@ -297,11 +387,26 @@ export function renderScanpath(
 
   // Ordinals in a second pass, so a later circle cannot paint over an earlier
   // number.
-  const labels = layoutOrdinals(circles, scale, { width, height });
+  //
+  // The first pass is also the density measurement: every label that had to
+  // leave its circle reports one collision, and past MAX_DISPLACED_ORDINALS of
+  // them the numbers have stopped being readable as an ordering. In that case
+  // the longest fixations keep their numbers and the pass is re-run over only
+  // those — which is not just fewer labels but better-placed ones, since most
+  // of them can now sit inside their own circle where they belong.
+  const bounds = { width, height };
+  let numbered = circles.map((c, i) => ({ ...c, ordinal: i + 1 }));
+  let labels = layoutOrdinals(numbered, scale, bounds);
 
-  for (let i = 0; i < circles.length; i++) {
-    const c = circles[i];
-    const text = String(i + 1);
+  if (labels.filter((label) => label.leader).length > MAX_DISPLACED_ORDINALS) {
+    const keep = selectOrdinals(fixations.map((f) => f.duration));
+    numbered = keep.map((i) => ({ ...circles[i], ordinal: i + 1 }));
+    labels = layoutOrdinals(numbered, scale, bounds);
+  }
+
+  for (let i = 0; i < numbered.length; i++) {
+    const c = numbered[i];
+    const text = String(c.ordinal);
     const spot = labels[i];
 
     if (spot.leader) {

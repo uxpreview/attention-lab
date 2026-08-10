@@ -111,6 +111,16 @@ export async function renderResults(
   const stage = el("div", { class: "results-stage" });
   const overlay = el("canvas", { class: "results-overlay", role: "img" });
   const aoiLayer = el("div", { class: "aoi-layer" });
+  /** The box the measurements are drawn on, which is the stimulus itself.
+   *
+   * The overlay and the region layer used to be positioned from a measurement
+   * of the image taken at draw time — right until something resized the image
+   * without firing a resize event. Print does precisely that, and produced a
+   * figure whose heat blobs and region boxes sat up to 30% of the figure's
+   * width away from the components they were measuring. Wrapping the stimulus
+   * and its two annotation layers in one shrink-wrapped box makes the tracking
+   * a CSS fact instead of a cached number. */
+  const figure = el("div", { class: "results-figure" });
   let stimulusImage: HTMLImageElement | null = null;
   let objectUrl: string | null = null;
 
@@ -154,12 +164,19 @@ export async function renderResults(
   if (study.stimulus.kind === "image") {
     objectUrl = URL.createObjectURL(study.stimulus.blob);
     stimulusImage = el("img", { class: "results-image", src: objectUrl, alt: "" });
-    stage.append(stimulusImage);
+    // The figure takes the stimulus's ratio so the image fills it with no
+    // letterbox — a letterboxed strip is figure that is not stimulus, and the
+    // overlay inset to the figure would be painting attention onto it.
+    figure.style.aspectRatio = `${study.stimulus.width} / ${study.stimulus.height}`;
+    figure.append(stimulusImage);
     if (!hasRecordings) {
       emptyStrip = el("div", { class: "stage-empty" }, el("p", {}, emptyLine), runAction());
     }
   } else {
-    stage.append(
+    // Nothing to shrink-wrap: the figure takes the stage, which is where a URL
+    // study's overlay has always been drawn.
+    figure.classList.add("results-figure--fill");
+    figure.append(
       el(
         "div",
         { class: "results-placeholder" },
@@ -176,7 +193,8 @@ export async function renderResults(
       )
     );
   }
-  stage.append(overlay, aoiLayer);
+  figure.append(overlay, aoiLayer);
+  stage.append(figure);
 
   const legend = el("figure", { class: "legend-slot" });
   // Regions and recordings live under the stage, at the width of the stage.
@@ -186,6 +204,18 @@ export async function renderResults(
   // stage: the view, who is in it, and the headline numbers for that selection.
   const dataBlock = el("div", { class: "results-data" });
   const sidebar = el("aside", { class: "results-sidebar" });
+  /** The rail's own grid cell, and the reason the rail cannot wander.
+   *
+   * A sticky box is constrained by its containing block, and Blink resolves
+   * that for a grid item to the grid *container's* content box — not to the
+   * item's grid area, which is only special-cased for absolutely positioned
+   * children. So a sticky rail placed directly in the layout treats the whole
+   * page as its runway: scrolled to the foot of a populated study it sat on top
+   * of the full-width Recordings card below the stage, taking a 320×296px bite
+   * out of it and putting itself between the cursor and four Delete buttons.
+   * Wrapping it means the containing block is this element, which is one grid
+   * cell in the stage's row and stops where the stage does. */
+  const rail = el("div", { class: "results-rail" }, sidebar);
   // The data block is a child of the *layout*, not of the main column, and
   // spans both grid tracks. As a child of the main column it left the rail
   // stranded: the sidebar ended level with the stage while the tables ran on
@@ -196,7 +226,7 @@ export async function renderResults(
     "div",
     { class: "results-layout" },
     el("div", { class: "results-main" }, stage, emptyStrip, legend),
-    sidebar,
+    rail,
     dataBlock
   );
 
@@ -345,21 +375,16 @@ export async function renderResults(
 
   const draw = async (): Promise<void> => {
     await nextFrame();
-    const rect = (stimulusImage ?? stage).getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
+    // Position is CSS's job now (see .results-figure): both layers are inset to
+    // the stimulus, so they cannot drift out of register with it. The only
+    // thing left to compute is the canvas's backing-store resolution, and even
+    // that degrades gracefully — a canvas whose CSS box has since grown scales
+    // its bitmap, so a stale backing store is softer but never misplaced.
+    const rect = figure.getBoundingClientRect();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
 
-    overlay.style.left = `${rect.left - stageRect.left}px`;
-    overlay.style.top = `${rect.top - stageRect.top}px`;
-    overlay.style.width = `${rect.width}px`;
-    overlay.style.height = `${rect.height}px`;
     overlay.width = Math.max(1, Math.round(rect.width * dpr));
     overlay.height = Math.max(1, Math.round(rect.height * dpr));
-
-    aoiLayer.style.left = overlay.style.left;
-    aoiLayer.style.top = overlay.style.top;
-    aoiLayer.style.width = overlay.style.width;
-    aoiLayer.style.height = overlay.style.height;
 
     overlay.setAttribute("aria-label", `${OVERLAY_LABELS[mode]} overlay`);
 
@@ -612,6 +637,10 @@ export async function renderResults(
           )
         )
       ),
+      // Print drops the chips — a live control on paper is noise — and used to
+      // leave the VIEW heading standing over nothing. This says which view the
+      // figure above it actually is, and is invisible on screen.
+      el("p", { class: "print-only" }, OVERLAY_LABELS[mode]),
       regionToggle()
     );
 
@@ -641,9 +670,18 @@ export async function renderResults(
     );
     participantSelect.value = selected;
 
+    const scopeName =
+      selected === "all"
+        ? `All participants (${aggregateSet().length})`
+        : (analysed.find((a) => a.recording.id === selected)?.recording.participant ??
+          "All participants");
+
     sidebar.append(
       el("h3", {}, el("label", { for: "participant-filter" }, "Participants")),
-      participantSelect
+      participantSelect,
+      // The select is a form control and prints as one; what a reader of the
+      // printout needs is the scope the figure was drawn at, in text.
+      el("p", { class: "print-only" }, scopeName)
     );
 
     const flagged = flaggedRecordings();
@@ -878,12 +916,21 @@ export async function renderResults(
                   },
                 })
               ),
-              hasRecordings ? el("td", {}, formatPercent(agg.hitRate)) : null,
-              hasRecordings ? el("td", {}, formatMs(agg.meanDwell)) : null,
+              // Each measure carries its own header name. Below 640px the row
+              // becomes two lines — name above, measures below — and the thead
+              // stops lining up with anything, so the label travels with the
+              // number instead of sitting in a column header that is no longer
+              // over it. See .cell-measure in styles.css.
+              hasRecordings
+                ? el("td", { class: "cell-measure", "data-label": "Seen" }, formatPercent(agg.hitRate))
+                : null,
+              hasRecordings
+                ? el("td", { class: "cell-measure", "data-label": "Dwell" }, formatMs(agg.meanDwell))
+                : null,
               hasRecordings
                 ? el(
                     "td",
-                    {},
+                    { class: "cell-measure", "data-label": "TTFF" },
                     agg.meanTimeToFirstFixation === null
                       ? "—"
                       : formatMs(agg.meanTimeToFirstFixation)
@@ -1149,18 +1196,31 @@ function renderRawPoints(canvas: HTMLCanvasElement, recordings: Recording[]): vo
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // fillRect rather than one beginPath/arc/fill per sample: a minute of gaze
-  // is ~1800 dots per participant, and at this size square dots are
-  // indistinguishable from round ones while keeping the per-dot alpha
-  // build-up that makes dense clusters read darker.
+  // Round dots, one fill each.
+  //
+  // These were 5px fillRects, on the argument that a square is indistinguishable
+  // from a circle at this size. It is not: at 1× the cloud reads as pixel debris
+  // rather than as samples, which is the wrong impression of the one view that
+  // shows the tracker's raw output.
+  //
+  // One path for the whole cloud with a single fill at the end would be cheaper
+  // still, but it would also flatten the thing this view is for: within a single
+  // path, overlapping subpaths are painted once, so a dense cluster would come
+  // out the same 0.35 alpha as a lone stray. The legend promises "density reads
+  // as saturation", so each sample is filled on its own and the alpha stacks.
+  // A minute of gaze is ~1800 samples per participant; this is a few
+  // milliseconds on a debounced redraw, not a per-frame cost.
   //
   // Colours come from the shared categorical palette, which is also what the
   // legend keys — three unattributable dot clouds are worse than one.
-  const size = 5;
+  const radius = 2.5;
+  const TAU = Math.PI * 2;
   recordings.forEach((recording, index) => {
     ctx.fillStyle = participantColour(index, 0.35);
     for (const p of recording.points) {
-      ctx.fillRect(p.x * canvas.width - size / 2, p.y * canvas.height - size / 2, size, size);
+      ctx.beginPath();
+      ctx.arc(p.x * canvas.width, p.y * canvas.height, radius, 0, TAU);
+      ctx.fill();
     }
   });
 }

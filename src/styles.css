@@ -1304,19 +1304,29 @@ p {
   font-size: 13px;
 }
 /* The counter stays visible for the whole 18-click sequence — the dimming
-   instruction panel above must never take the progress readout with it. */
-.calib-progress {
+   instruction panel above must never take the progress readout with it. It
+   shares a line with the face-lost warning, in the thin band at the foot of the
+   screen that no calibration or validation point reaches: where you are in the
+   sequence and why nothing is being collected belong together. */
+.calib-status {
   position: absolute;
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 92vw;
+  pointer-events: none;
+}
+.calib-progress {
   margin: 0;
   font-family: var(--font-mono);
   font-size: 13px;
   letter-spacing: 0.005em;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-  pointer-events: none;
+  white-space: nowrap;
 }
 /* Bottom-left, which is the corner furthest from anything the participant is
    asked to hit: at top-right it overlapped calibration point 3's ring halo, so
@@ -1382,6 +1392,35 @@ p {
   box-shadow:
     0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
     0 0 0 10px color-mix(in srgb, var(--signal-good) 20%, transparent);
+}
+/* Face lost. Last in the cascade so it wins over .is-active: a dot that is
+   sampling nothing is more urgent than a dot that is sampling. Warn rather than
+   bad — the sequence is still recoverable, which is the entire point of showing
+   this while it is happening instead of at the end. */
+.calib-dot.is-lost,
+.calib-dot.is-active.is-lost {
+  animation: none;
+  border-color: var(--signal-warn);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+    0 0 0 10px color-mix(in srgb, var(--signal-warn) 22%, transparent);
+}
+.calib-dot.is-lost .calib-ring-sweep {
+  stroke: var(--signal-warn);
+}
+/* Beside the counter, in the band the dots leave clear at the foot of the
+   screen. Same treatment as the recording stage's .record-hint.is-lost, because
+   it is the same condition and must not read as a different one. */
+.calib-lost {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.005em;
+  color: var(--signal-warn);
+  background: color-mix(in srgb, #003f48 82%, transparent);
+  padding: 6px 14px;
+  border-radius: var(--r-chip);
+  white-space: nowrap;
 }
 @keyframes pulse {
   0%,
@@ -1754,10 +1793,29 @@ p {
      recording. Rows keep their own heights; the slack collects at the foot. */
   align-content: start;
 }
+/* Before the first recording there is nothing to put in a rail.
+ *
+ * The rail's populated job — the view switcher, the participant filter, the
+ * headline numbers — does not exist yet, so it collapses to a 320×198 "VIEW"
+ * card and reserves a full-height column anyway: a measured 320×517px of empty
+ * cream beside the stage, in the state a first-time visitor is most likely to
+ * open. Exactly the failure the note above .results-data describes fixing for
+ * the populated screen. With no recordings the short card flows under the
+ * stage instead. `.recording-list` is rendered only when there are recordings,
+ * so the layout reads its own contents rather than trusting a class to be
+ * kept in sync. */
+.results-layout:not(:has(.recording-list)) {
+  grid-template-columns: minmax(0, 1fr);
+}
 .results-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+/* The rail's grid cell. It carries no ink of its own — see the sticky rule
+   below for why it exists at all. */
+.results-rail {
+  min-width: 0;
 }
 /* The rail tracks the scroll instead of stranding at the top of a long page.
    Only where it certainly fits: a sticky block taller than the viewport pins
@@ -1766,7 +1824,26 @@ p {
    at which the rail's tallest state — five view chips, the participant select,
    the low-signal toggle, its note and five summary rows — has room to spare. */
 @media (min-width: 1181px) and (min-height: 760px) {
-  .results-sidebar {
+  /* The runway, and its end.
+   *
+   * The rail used to be the grid item itself, and a sticky grid item is
+   * constrained by its containing block — which Blink resolves to the grid
+   * *container's* content box, not to the item's grid area. With the full-width
+   * data row below the stage that gave the rail the whole page to travel down:
+   * at 1440×900, scrolled to the foot of a populated study, it sat on top of the
+   * Recordings card — a measured 320×296px bite out of it, every row sliced
+   * mid-word at "yest…", and four of the five Delete buttons behind an element
+   * that took the click instead. Worse at 1200px.
+   *
+   * The wrapper is the fix: it is the grid item, so it occupies the stage's row
+   * and nothing else, and it is what the sticky box is now measured against.
+   * Stretching it to the row gives the rail exactly the stage's height of
+   * travel — which is all it should ever have, since the stage is the only
+   * thing it governs. */
+  .results-layout:has(.recording-list) .results-rail {
+    align-self: stretch;
+  }
+  .results-layout:has(.recording-list) .results-sidebar {
     position: sticky;
     top: 24px;
   }
@@ -1824,14 +1901,61 @@ p {
   justify-content: center;
   min-height: 320px;
 }
-.results-image {
+/* The measured rect, as a box rather than as a number.
+ *
+ * The overlay canvas and the region layer used to be siblings of the stimulus,
+ * positioned by JS from the stimulus's measured rect — correct at the instant
+ * of measurement and wrong the moment anything resized the image without firing
+ * a resize event. Printing did exactly that: the print rules grow the figure
+ * from 974×626 to 1398×899 while the canvas and the region boxes stay pinned at
+ * their on-screen size, so on paper every heat blob and every AOI box landed up
+ * to 30% of the figure's width away from the component it was measuring —
+ * "Order summary" floating over the payment column. A printed figure that
+ * misattributes attention is the worst failure this tool has, and it is silent.
+ * The two layers are now children of a shrink-wrapped box that *is* the
+ * stimulus, so they track it in CSS at whatever size it is drawn. JS only sets
+ * the canvas's backing-store resolution. */
+.results-figure {
+  position: relative;
+  display: block;
   max-width: 100%;
   max-height: 78vh;
-  object-fit: contain;
+  min-width: 0;
+  line-height: 0;
+}
+/* With no image there is nothing to shrink-wrap: the URL placeholder's overlay
+   covers the whole stage, as it did before. */
+.results-figure--fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+  max-height: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: normal;
+}
+/* The figure carries the stimulus's own aspect ratio, set inline from the
+   study's stored dimensions, and the stimulus fills it. `contain` therefore has
+   nothing to letterbox — which is the point: a letterbox is a strip of figure
+   that is not stimulus, and the overlay inset to the figure would be measuring
+   it. Whatever size the figure ends up at, the image is exactly that size. */
+.results-image {
   display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.results-overlay,
+.aoi-layer {
+  position: absolute;
+  inset: 0;
+  /* Stated rather than inferred from the insets: a canvas is a replaced
+     element, so `left: 0; right: 0` alone would leave it at the intrinsic size
+     of its backing store instead of stretching to the figure. */
+  width: 100%;
+  height: 100%;
 }
 .results-overlay {
-  position: absolute;
   pointer-events: none;
 }
 .results-placeholder {
@@ -2091,6 +2215,12 @@ p {
   white-space: nowrap;
   border: 0;
 }
+/* The reverse of .sr-only for paper: a line that stands in for a control the
+   print stylesheet removes, so a reader can still see what the figure was
+   scoped to. Turned on by the @media print block at the foot of this file. */
+.print-only {
+  display: none;
+}
 /* An acronym in a header cell has to be able to say what it stands for. */
 abbr[title] {
   text-decoration: underline dotted;
@@ -2208,7 +2338,8 @@ abbr[title] {
 /* --- Regions ---------------------------------------------------------- */
 
 .aoi-layer {
-  position: absolute;
+  /* Geometry lives with .results-figure above: the layer is inset to its
+     stimulus rather than positioned from a measurement of it. */
   pointer-events: none;
 }
 /* Regions are annotation, not measurement, and the overlay that ends up in a
@@ -2381,10 +2512,20 @@ abbr[title] {
   background: transparent;
   border-color: color-mix(in srgb, var(--strong) 25%, var(--line));
 }
+/* The disabled filled pill gets a palette rather than a dimmer.
+ *
+ * Blanket 0.45 opacity composited the teal fill to #889f9a and its cream label
+ * to #fbf2e2 over the panel: a measured 2.53:1, well under AA, on the control a
+ * moderator stares at for the whole time a participant is framing their face —
+ * and quiet enough that the outlined "Reuse calibration" beside it read as the
+ * more important of the two, inverting the hierarchy. A washed accent field
+ * with the muted ink on it stays obviously inert while clearing 4.5:1. */
+.btn-primary[disabled],
 .btn-primary[disabled]:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--body);
 }
 
 /* The stack point is set by the stage, not by the breakpoint chart. Holding
@@ -2401,26 +2542,66 @@ abbr[title] {
   .screen-fill {
     min-height: 0;
   }
+  /* The rail carries the primary control of this screen, and stacking it after
+     the main column put it 984px down an 800px viewport at 1024×800: changing
+     view meant scrolling past the stage and the legend, clicking, then
+     scrolling back up to see what changed. Dissolving the main column lets the
+     rail sit directly under the stage, with the legend — which describes the
+     view rather than choosing it — after it.
+     Only where there is a view to switch: with no recordings the main column
+     stays a flex column, because .stage-empty is joined to the stage's bottom
+     edge by a -1px margin that a grid gap would prise open. */
+  .results-layout:has(.recording-list) .results-main {
+    display: contents;
+  }
+  .results-layout:has(.recording-list) .results-stage {
+    order: 1;
+  }
+  .results-layout:has(.recording-list) .results-rail {
+    order: 2;
+  }
+  /* The grid gap owns the spacing once these are siblings rather than a stack
+     inside the main column. */
+  .results-layout:has(.recording-list) .legend-slot {
+    order: 3;
+    margin-top: 0;
+  }
+  .results-layout:has(.recording-list) .results-data {
+    order: 4;
+    margin-top: 0;
+  }
+  /* One honest row of five. The two-column grid that reads as a segmented
+     control at 320px became five chips of 448, 448, 448, 448 and 902px once
+     the rail went full width — a nearly metre-wide "Raw gaze" pill. */
+  .segmented {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .segmented .seg:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+  .seg {
+    padding: 9px 6px;
+  }
 }
 
 @media (max-width: 900px) {
+  /* The thumbnail stays a tile; only the actions move.
+   *
+   * It used to go full-bleed here, and the two ways of filling a 706×120 band
+   * are both wrong: `cover` crops a 1400×900 wireframe to a horizontal slice
+   * through the payment fields — no context, and recognition is the only job a
+   * study thumbnail has — while `contain` renders that wireframe 187px wide
+   * inside the band and leaves 74% of every card's thumbnail area as flat tint,
+   * three times down the page. A URL study was worse: an empty 706×120 box with
+   * the word "URL" floating in it. At 96×68 the contained-vs-cropped question
+   * does not arise, so the tile keeps its size and the buttons wrap under it
+   * instead. */
   .study-card {
-    grid-template-columns: 1fr;
+    grid-template-columns: 96px minmax(0, 1fr);
   }
-  /* Full width, but not a centre-crop. At 96×68 `cover` is a legible
-     whole-page mini; stretched to ~700×120 it became a horizontal slice
-     through the middle of a wireframe — a fragment of the payment fields with
-     no context, which destroys the one piece of recognition a study list
-     needs. Contained and top-anchored, the thumbnail shows the top of the
-     screen the way a browser tab preview does. */
-  .study-thumb {
-    width: 100%;
-    height: 120px;
-  }
-  .study-thumb img {
-    object-fit: contain;
-    object-position: center top;
-    background: var(--tint);
+  .study-actions {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
   }
 }
 
@@ -2481,6 +2662,70 @@ abbr[title] {
   .note-row {
     padding: 16px 0;
   }
+  /* Five chips across a 350px rail is five 62px cells, and "Spotlight" does
+     not fit in one. Back to the two-column control the base rule describes. */
+  .segmented {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .segmented .seg:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  /* Areas of interest as a two-line row.
+   *
+   * The region name is the one column a reader scans, and sharing a single
+   * table row with three measures and a Delete button left it rendering
+   * "Paymen", "Discoun", "Order su" at 390px — a table of six-character stubs.
+   * The name takes a full line of its own; the measures sit under it on a
+   * second line, each carrying its own header, because the thead no longer
+   * lines up with anything once the row stops being a row. Nothing is dropped:
+   * TTFF is as much a finding as Dwell, and hiding it at one width would make
+   * the same study report different things on different screens. */
+  .data-table thead {
+    display: none;
+  }
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+  }
+  .data-table tr {
+    position: relative;
+    /* A gutter for the ordinal chip, which is lifted out of the flow so the
+       name and the measures under it share one left edge. */
+    padding: 12px 0 12px 26px;
+    border-bottom: 1px solid var(--line);
+  }
+  .data-table td {
+    padding: 0;
+    border: 0;
+  }
+  .data-table .cell-ordinal {
+    position: absolute;
+    top: 14px;
+    left: 0;
+    width: auto;
+  }
+  .data-table .cell-name {
+    width: auto;
+    /* Clear of the Delete button, which is also out of the flow. */
+    padding-right: 92px;
+  }
+  .data-table .cell-action {
+    position: absolute;
+    top: 8px;
+    right: 0;
+  }
+  .data-table .cell-measure {
+    display: inline-block;
+    margin: 8px 16px 0 0;
+    font-size: 12.5px;
+    color: var(--body);
+  }
+  .data-table .cell-measure::before {
+    content: attr(data-label) " ";
+    color: var(--muted);
+  }
 }
 
 /* --- Print ------------------------------------------------------------ */
@@ -2503,8 +2748,20 @@ abbr[title] {
   .segmented,
   .checkbox,
   .cell-action,
-  .col-action {
+  .col-action,
+  /* Live controls do not belong on paper. The view chips were already gone;
+     the participant <select> printed as a form control and the Recordings list
+     printed five Delete buttons. What each of those controls was *set to* is a
+     fact the reader needs, so .print-only lines state it in text — see
+     buildSidebar in ui/results.ts, which is also why the VIEW and PARTICIPANTS
+     headings no longer sit over nothing. */
+  .results-sidebar select,
+  .recording-list button {
     display: none !important;
+  }
+  /* The mirror of the rule above: static text that only exists on paper. */
+  .print-only {
+    display: block !important;
   }
   .screen,
   .screen-fill {
@@ -2536,10 +2793,18 @@ abbr[title] {
     min-height: 0;
     border-color: #ccc;
   }
-  .results-image {
+  /* Safe to grow the figure to the page now that the overlay and the region
+     boxes are inset to it rather than sized from a screen measurement — see
+     .results-figure. Before that, this was the bug: the stimulus grew from
+     974×626 to 1398×899 and its measurements stayed where they were. */
+  .results-figure {
     max-height: none;
     width: 100%;
   }
+  /* The rail was not in this list, so a printed report carried one large beige
+     block down its side — the exact ink cost this block's own note says it is
+     avoiding. */
+  .results-sidebar,
   .results-block,
   .legend {
     background: transparent;

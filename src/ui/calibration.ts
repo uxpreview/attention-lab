@@ -130,6 +130,22 @@ export async function runCalibration(
   // after the first dot, and progress is the one thing that has to stay
   // visible for all eighteen clicks — it is what buys participant patience.
   const progress = el("p", { class: "calib-progress", role: "status" });
+  /**
+   * The one condition that invalidates the whole sequence, said while it is
+   * still recoverable.
+   *
+   * The recording stage has flagged a lost face since it was built; calibration
+   * did not, and calibration is where it costs the most. A participant who
+   * drifts out of frame at dot 3 goes on to click ten more dots collecting
+   * nothing, and finds out at the end via "Not enough calibration data" —
+   * a minute of session time spent, and the sequence starts again. The dot's
+   * ring turns warn-coloured and this line appears beside the counter.
+   */
+  const lostHint = el(
+    "p",
+    { class: "calib-lost", role: "status", hidden: true },
+    "Face lost — move back into frame and check your lighting"
+  );
   const dot = el(
     "button",
     { class: "calib-dot", type: "button", "aria-label": "Calibration point" },
@@ -145,11 +161,29 @@ export async function runCalibration(
     () => cancel(),
     "btn btn-ghost btn-small calib-cancel"
   );
-  overlay.append(instruction, progress, dot, cancelBtn);
+  // One line at the foot of the screen: the counter, and beside it the reason
+  // the counter has stopped meaning anything.
+  overlay.append(
+    instruction,
+    el("div", { class: "calib-status" }, progress, lostHint),
+    dot,
+    cancelBtn
+  );
   host.append(overlay);
 
   const restoreBackground = inertSiblings(host, overlay);
   overlay.focus();
+
+  // Same subscription the recording stage uses, so "face lost" cannot mean two
+  // different things in two phases of the same session.
+  let faceLost = false;
+  const offStatus = engine.onStatus((status) => {
+    const lost = !status.faceVisible;
+    if (lost === faceLost) return;
+    faceLost = lost;
+    dot.classList.toggle("is-lost", lost);
+    lostHint.hidden = !lost;
+  });
 
   const samples: CalibrationSample[] = [];
   let cancelled = false;
@@ -227,6 +261,7 @@ export async function runCalibration(
     return { cancelled: false, validationError: mean };
   } finally {
     window.removeEventListener("keydown", onKey);
+    offStatus();
     engine.stopCollecting();
     restoreBackground();
     overlay.remove();

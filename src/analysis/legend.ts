@@ -138,7 +138,12 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         minLabel: "First",
         maxLabel: "Last",
         swatches: null,
-        note: "Circle area is dwell time and the numeral is the ordinal. One participant at a time — an averaged scanpath would be a path nobody took.",
+        // The ramp is viridis rather than a hue sweep, so the strip above reads
+        // as an ordering on its own — dark to light — and survives greyscale
+        // and colour vision deficiency. The thinning is stated because a reader
+        // counting numerals on a dense path would otherwise find gaps and have
+        // to guess what they mean.
+        note: "Circle area is dwell time and the numeral is the fixation's place in the sequence, dark for first through light for last. Where fixations pile up, only the longest keep their numbers, so the ones shown stay readable. One participant at a time — an averaged scanpath would be a path nobody took.",
       };
     case "raw":
       return {
