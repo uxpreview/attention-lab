@@ -1,11 +1,14 @@
 import { FaceTracker, type TrackerFrame } from "./faceTracker";
 import {
+  BLINK_CLOSE_OPENNESS,
+  BLINK_OPEN_OPENNESS,
   buildFeatureVector,
+  FEATURE_DIM,
   isUsableFace,
   readFaceState,
   type FaceState,
 } from "./features";
-import { OneEuroPoint } from "./filter";
+import { MedianPoint, OneEuroPoint } from "./filter";
 import { fitRidge, predict, type RidgeModel } from "./regression";
 
 /**
@@ -42,15 +45,28 @@ export interface CalibrationSample {
   targetY: number;
 }
 
+/**
+ * Fitting fewer samples than ~3x the feature dimension invites an
+ * ill-conditioned fit even with ridge behind it; 60 also guarantees several
+ * distinct targets at the ~25 frames a calibration dot collects.
+ */
+const MIN_CALIBRATION_SAMPLES = Math.max(60, 3 * FEATURE_DIM);
+
+/** Frames dropped after a blink ends, while the mesh re-settles on the iris. */
+const POST_BLINK_SETTLE_FRAMES = 2;
+
 export class GazeEngine {
   readonly tracker = new FaceTracker();
 
   private model: RidgeModel | null = null;
+  private despike = new MedianPoint();
   private filter = new OneEuroPoint({ minCutoff: 0.9, beta: 0.012 });
   private gazeListeners = new Set<GazeListener>();
   private statusListeners = new Set<StatusListener>();
   private lastFace: FaceState | null = null;
   private faceVisible = false;
+  private blinking = false;
+  private blinkSettleFrames = 0;
   private collecting: CalibrationSample[] | null = null;
   private collectTarget: { x: number; y: number } | null = null;
 
@@ -63,7 +79,9 @@ export class GazeEngine {
   }
 
   get calibrationError(): number | null {
-    return this.model ? this.model.cvError : null;
+    // cvError is NaN when cross-validation could not run; report that as
+    // "unknown" rather than letting NaN leak into the UI.
+    return this.model && Number.isFinite(this.model.cvError) ? this.model.cvError : null;
   }
 
   get currentFace(): FaceState | null {
@@ -76,9 +94,12 @@ export class GazeEngine {
 
   stop(): void {
     this.tracker.stop();
+    this.despike.reset();
     this.filter.reset();
     this.lastFace = null;
     this.faceVisible = false;
+    this.blinking = false;
+    this.blinkSettleFrames = 0;
   }
 
   onGaze(listener: GazeListener): () => void {
@@ -108,9 +129,9 @@ export class GazeEngine {
 
   /** Fits a new gaze model from collected samples and installs it. */
   calibrate(samples: CalibrationSample[]): RidgeModel {
-    if (samples.length < 20) {
+    if (samples.length < MIN_CALIBRATION_SAMPLES) {
       throw new Error(
-        `Not enough calibration data (${samples.length} samples). Try again and hold your gaze on each dot.`
+        `Not enough calibration data (${samples.length} of ${MIN_CALIBRATION_SAMPLES} samples). Try again and hold your gaze on each dot.`
       );
     }
     const model = fitRidge(
@@ -124,6 +145,7 @@ export class GazeEngine {
 
   setModel(model: RidgeModel | null): void {
     this.model = model;
+    this.despike.reset();
     this.filter.reset();
     this.emitStatus();
   }
@@ -142,7 +164,22 @@ export class GazeEngine {
       return;
     }
 
-    const usable = isUsableFace(face);
+    // Blink hysteresis. On the way out of a blink the lid still occludes part
+    // of the iris and the mesh needs a moment to re-settle, so a blink only
+    // ends once openness clears a higher threshold than the one that started
+    // it, and the first frames after that are dropped too.
+    const minOpenness = Math.min(face.left.openness, face.right.openness);
+    if (minOpenness < BLINK_CLOSE_OPENNESS) {
+      this.blinking = true;
+    } else if (this.blinking && minOpenness >= BLINK_OPEN_OPENNESS) {
+      this.blinking = false;
+      this.blinkSettleFrames = POST_BLINK_SETTLE_FRAMES;
+    }
+
+    const settling = this.blinkSettleFrames > 0;
+    if (settling) this.blinkSettleFrames--;
+
+    const usable = isUsableFace(face) && !this.blinking && !settling;
     this.emitStatus(usable);
     if (!usable) return;
 
@@ -161,7 +198,11 @@ export class GazeEngine {
     const [rawX, rawY] = predict(this.model, features);
     if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return;
 
-    const [x, y] = this.filter.filter(rawX, rawY, frame.timestamp);
+    // Median-of-three before One Euro: the One Euro filter is built to follow
+    // fast jumps, so single-frame artifacts (a lid clipping the iris mid-blink)
+    // must be removed before it, not by it.
+    const [mx, my] = this.despike.filter(rawX, rawY);
+    const [x, y] = this.filter.filter(mx, my, frame.timestamp);
     const sample: GazeSample = { x, y, t: frame.timestamp, face };
     for (const listener of this.gazeListeners) listener(sample);
   };

@@ -10,9 +10,10 @@
  */
 
 import { detectFixations, summarise } from "../analysis/fixations";
+import { fieldPercentile } from "../analysis/heatmap";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
-import { OneEuroPoint } from "../tracker/filter";
+import { MedianPoint, OneEuroPoint } from "../tracker/filter";
 import { deserialiseModel, fitRidge, predict, serialiseModel } from "../tracker/regression";
 
 let failures = 0;
@@ -68,13 +69,15 @@ function simulateFace(
   // Iris offset is roughly sin of eye rotation, scaled by apparent eye size.
   const gain = 0.42 / head.scale;
   const jitter = () => (rand() - 0.5) * noise;
-  const offsetX = Math.sin(eyeYaw) * gain + jitter();
-  const offsetY = Math.sin(eyePitch) * gain + jitter();
+  const offsetX = Math.sin(eyeYaw) * gain;
+  const offsetY = Math.sin(eyePitch) * gain;
 
-  // The two eyes differ slightly through vergence.
+  // The two eyes differ slightly through vergence. Landmark noise is applied
+  // per eye, not shared: the mesh jitters each iris independently, which is
+  // what keeps the vergence signal from being implausibly clean.
   const eye = (dx: number, dy: number) => ({
     iris: { x: 0.5 + dx, y: 0.5 + dy },
-    offset: { x: dx, y: dy },
+    offset: { x: dx + jitter(), y: dy + jitter() },
     openness: 0.32,
   });
 
@@ -104,28 +107,26 @@ interface FitResult {
   model: ReturnType<typeof fitRidge>;
 }
 
-/**
- * Runs a full calibrate-then-test cycle. `drift` simulates the participant's
- * head moving between calibration and the recording, which is the single
- * biggest source of real-world degradation.
- */
-function calibrateAndTest(noise: number, drift: number, seed: number): FitResult {
-  const rand = makeRandom(seed);
-  const baseHead = { yaw: 0.02, pitch: -0.03, x: 0.5, y: 0.48, scale: 0.62 };
+const BASE_HEAD = { yaw: 0.02, pitch: -0.03, x: 0.5, y: 0.48, scale: 0.62 };
 
+/** Simulates a full calibration run: bursts of frames per dot, with small
+ * natural head movement throughout. */
+function buildCalibrationData(
+  noise: number,
+  rand: () => number
+): { rows: number[][]; targetX: number[]; targetY: number[] } {
   const rows: number[][] = [];
   const targetX: number[] = [];
   const targetY: number[] = [];
 
   for (const [nx, ny] of CALIBRATION_GRID) {
     for (let s = 0; s < 22; s++) {
-      // Small natural head movement during calibration.
       const head = {
-        yaw: baseHead.yaw + (rand() - 0.5) * 0.06,
-        pitch: baseHead.pitch + (rand() - 0.5) * 0.05,
-        x: baseHead.x + (rand() - 0.5) * 0.02,
-        y: baseHead.y + (rand() - 0.5) * 0.02,
-        scale: baseHead.scale + (rand() - 0.5) * 0.01,
+        yaw: BASE_HEAD.yaw + (rand() - 0.5) * 0.06,
+        pitch: BASE_HEAD.pitch + (rand() - 0.5) * 0.05,
+        x: BASE_HEAD.x + (rand() - 0.5) * 0.02,
+        y: BASE_HEAD.y + (rand() - 0.5) * 0.02,
+        scale: BASE_HEAD.scale + (rand() - 0.5) * 0.01,
       };
       const face = simulateFace(nx * SCREEN_W, ny * SCREEN_H, head, noise, rand);
       rows.push(buildFeatureVector(face));
@@ -133,6 +134,18 @@ function calibrateAndTest(noise: number, drift: number, seed: number): FitResult
       targetY.push(ny * SCREEN_H);
     }
   }
+
+  return { rows, targetX, targetY };
+}
+
+/**
+ * Runs a full calibrate-then-test cycle. `drift` simulates the participant's
+ * head moving between calibration and the recording, which is the single
+ * biggest source of real-world degradation.
+ */
+function calibrateAndTest(noise: number, drift: number, seed: number): FitResult {
+  const rand = makeRandom(seed);
+  const { rows, targetX, targetY } = buildCalibrationData(noise, rand);
 
   const model = fitRidge(rows, targetX, targetY);
 
@@ -142,11 +155,11 @@ function calibrateAndTest(noise: number, drift: number, seed: number): FitResult
     const tx = (0.08 + rand() * 0.84) * SCREEN_W;
     const ty = (0.08 + rand() * 0.84) * SCREEN_H;
     const head = {
-      yaw: baseHead.yaw + (rand() - 0.5) * drift,
-      pitch: baseHead.pitch + (rand() - 0.5) * drift * 0.8,
-      x: baseHead.x + (rand() - 0.5) * drift * 0.3,
-      y: baseHead.y + (rand() - 0.5) * drift * 0.3,
-      scale: baseHead.scale + (rand() - 0.5) * drift * 0.15,
+      yaw: BASE_HEAD.yaw + (rand() - 0.5) * drift,
+      pitch: BASE_HEAD.pitch + (rand() - 0.5) * drift * 0.8,
+      x: BASE_HEAD.x + (rand() - 0.5) * drift * 0.3,
+      y: BASE_HEAD.y + (rand() - 0.5) * drift * 0.3,
+      scale: BASE_HEAD.scale + (rand() - 0.5) * drift * 0.15,
     };
     const face = simulateFace(tx, ty, head, noise, rand);
     const [px, py] = predict(model, buildFeatureVector(face));
@@ -178,7 +191,8 @@ section("Feature extraction");
   const right = buildFeatureVector(
     simulateFace(1290, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
   );
-  check("horizontal gaze moves the iris offset monotonically", right[4] > left[4]);
+  // dx and dy sit at indices 0 and 1 of the basis.
+  check("horizontal gaze moves the iris offset monotonically", right[0] > left[0]);
 
   const up = buildFeatureVector(
     simulateFace(720, 80, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
@@ -186,10 +200,74 @@ section("Feature extraction");
   const down = buildFeatureVector(
     simulateFace(720, 820, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
   );
-  check("vertical gaze moves the iris offset monotonically", down[5] > up[5]);
+  check("vertical gaze moves the iris offset monotonically", down[1] > up[1]);
 }
 
 // --- Regression ----------------------------------------------------------
+
+section("Ridge solver");
+{
+  // Ground truth for the solver itself: a noiseless linear system the fit must
+  // reproduce almost exactly. The end-to-end thresholds below are loose enough
+  // to hide a subtle sign or indexing error; this is not.
+  const rand = makeRandom(31);
+  const rows: number[][] = [];
+  const tx: number[] = [];
+  const ty: number[] = [];
+  for (let i = 0; i < 80; i++) {
+    const x1 = rand() * 4 - 2;
+    const x2 = rand() * 4 - 2;
+    rows.push([x1, x2]);
+    tx.push(3 * x1 - 2 * x2 + 5);
+    ty.push(-x1 + 4 * x2 - 7);
+  }
+  const model = fitRidge(rows, tx, ty);
+
+  let worst = 0;
+  for (let i = 0; i < 20; i++) {
+    const x1 = rand() * 4 - 2;
+    const x2 = rand() * 4 - 2;
+    const [px, py] = predict(model, [x1, x2]);
+    worst = Math.max(worst, Math.abs(px - (3 * x1 - 2 * x2 + 5)), Math.abs(py - (-x1 + 4 * x2 - 7)));
+  }
+  check("recovers an exact linear system", worst < 0.05, `worst error ${worst.toExponential(2)}`);
+}
+
+section("Degenerate calibration data");
+{
+  const rand = makeRandom(41);
+  const randomRow = () => Array.from({ length: FEATURE_DIM }, () => rand());
+
+  // Fewer samples than features: no amount of ridge makes that a gaze model.
+  const n = FEATURE_DIM - 1;
+  let threw = false;
+  try {
+    fitRidge(
+      Array.from({ length: n }, randomRow),
+      Array.from({ length: n }, () => rand() * 1000),
+      Array.from({ length: n }, () => rand() * 800)
+    );
+  } catch {
+    threw = true;
+  }
+  check("refuses an underdetermined system", threw);
+
+  // Just past the floor: every CV fold's training split is <= FEATURE_DIM rows
+  // and gets skipped, so lambda must come from the fallback — and it must be a
+  // regularising value, not the weakest entry on the grid.
+  const rows: number[][] = [];
+  const targetX: number[] = [];
+  const targetY: number[] = [];
+  for (let i = 0; i < FEATURE_DIM + 4; i++) {
+    rows.push(randomRow());
+    targetX.push(i % 2 === 0 ? 200 : 1200);
+    targetY.push(450);
+  }
+  const model = fitRidge(rows, targetX, targetY);
+  check("falls back to a mid-grid lambda when no CV fold can run", model.lambda === 1, `lambda=${model.lambda}`);
+  check("reports cvError as NaN rather than a fabricated number", Number.isNaN(model.cvError));
+  check("still produces finite weights", Array.from(model.wx).every(Number.isFinite));
+}
 
 section("Gaze model fitting");
 {
@@ -218,6 +296,30 @@ section("Gaze model fitting");
 
   check("cross-validation picked a finite lambda", Number.isFinite(realistic.model.lambda), `lambda=${realistic.model.lambda}`);
   check("all weights are finite", Array.from(realistic.model.wx).every(Number.isFinite));
+  check("cross-validation reports a finite error", Number.isFinite(realistic.model.cvError), `${realistic.model.cvError.toFixed(1)}px`);
+
+  // Grouped CV holding out whole calibration dots should see noise for what it
+  // is. Interleaved folds leak near-duplicate neighbouring frames into the
+  // training set and would let a noisy fit get away with weak regularisation.
+  check(
+    "noisier data is regularised at least as hard as clean data",
+    realistic.model.lambda >= clean.model.lambda,
+    `clean lambda=${clean.model.lambda}, noisy lambda=${realistic.model.lambda}`
+  );
+
+  // Leakage guard: refit the identical samples with every row's target nudged
+  // to be unique, which collapses the grouping to per-row folds — the
+  // interleaved assignment this codebase used to have. Because each held-out
+  // frame then has near-duplicate neighbours in the training set, the reported
+  // error flatters substantially. Grouped CV must not.
+  const { rows, targetX, targetY } = buildCalibrationData(0.004, makeRandom(12));
+  const grouped = fitRidge(rows, targetX, targetY);
+  const leaky = fitRidge(rows, targetX.map((v, i) => v + i * 1e-9), targetY);
+  check(
+    "holding out whole dots reports honestly larger CV error than leaky folds",
+    grouped.cvError > leaky.cvError * 1.3,
+    `grouped ${grouped.cvError.toFixed(1)}px vs leaked ${leaky.cvError.toFixed(1)}px`
+  );
 
   // Round-tripping matters: a persisted calibration that predicts differently
   // would be worse than not persisting at all.
@@ -326,6 +428,63 @@ section("Fixation detection");
   );
 
   check("handles an empty recording", detectFixations([]).length === 0);
+
+  // A tracking dropout inside a stationary dwell: maxGap decides whether the
+  // dwell is split into two fixations or bridged into one.
+  const interrupted: Array<{ x: number; y: number; t: number }> = [];
+  let dropT = 0;
+  for (let i = 0; i < 9; i++) {
+    interrupted.push({ x: 400 + (rand() - 0.5) * 10, y: 300 + (rand() - 0.5) * 10, t: (dropT += 33) });
+  }
+  dropT += 200; // dropout: next sample arrives 233ms after the previous one
+  for (let i = 0; i < 9; i++) {
+    interrupted.push({ x: 400 + (rand() - 0.5) * 10, y: 300 + (rand() - 0.5) * 10, t: (dropT += 33) });
+  }
+  check(
+    "a dropout longer than maxGap splits a dwell in two",
+    detectFixations(interrupted, { dispersion: 45, minDuration: 100, maxGap: 150 }).length === 2
+  );
+  check(
+    "a generous maxGap bridges the same dropout",
+    detectFixations(interrupted, { dispersion: 45, minDuration: 100, maxGap: 300 }).length === 1
+  );
+}
+
+// --- Despike filter ------------------------------------------------------
+
+section("Median despike");
+{
+  // A single-frame blink artifact — the eyelid dragging the iris centroid down
+  // for one frame — must be deleted, not smoothed into a downward saccade.
+  const median = new MedianPoint();
+  median.filter(500, 400);
+  median.filter(502, 401);
+  const [, spikeY] = median.filter(505, 700); // the artifact frame
+  const [, afterY] = median.filter(503, 402);
+  check("a one-frame spike never reaches the output", spikeY < 410, `${spikeY.toFixed(0)}px`);
+  check("output returns to the true position after the spike", afterY < 410, `${afterY.toFixed(0)}px`);
+
+  // A genuine saccade persists across frames and must pass through.
+  const saccade = new MedianPoint();
+  saccade.filter(200, 300);
+  saccade.filter(201, 301);
+  saccade.filter(800, 300);
+  const [followX] = saccade.filter(802, 301);
+  check("a sustained jump passes through with one frame of lag", followX > 780, `${followX.toFixed(0)}px`);
+}
+
+// --- Heatmap scaling -----------------------------------------------------
+
+section("Heatmap percentile ceiling");
+{
+  const field = new Float32Array(100);
+  for (let i = 0; i < 100; i++) field[i] = i + 1;
+  const median = fieldPercentile(field, 0.5);
+  const p98 = fieldPercentile(field, 0.98);
+  check("finds the median of a uniform ramp", Math.abs(median - 50) < 1, `${median.toFixed(1)}`);
+  check("finds a high percentile of a uniform ramp", Math.abs(p98 - 98) < 1, `${p98.toFixed(1)}`);
+  check("zeroes are excluded from the distribution", fieldPercentile(Float32Array.of(0, 0, 0, 8), 0.5) > 7);
+  check("an empty field yields a zero ceiling", fieldPercentile(new Float32Array(16), 0.98) === 0);
 }
 
 // --- AOIs ----------------------------------------------------------------

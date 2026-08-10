@@ -3,6 +3,7 @@ import "./styles.css";
 import { deleteStudy, listStudies, newId, saveStudy } from "./data/store";
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
+import { FEATURE_BASIS_VERSION } from "./tracker/features";
 import { GazeEngine } from "./tracker/gaze";
 import { deserialiseModel, serialiseModel } from "./tracker/regression";
 import { describeAccuracy, runCalibration } from "./ui/calibration";
@@ -19,6 +20,10 @@ const engine = new GazeEngine();
 const CALIBRATION_KEY = "eyetrack.calibration";
 
 interface StoredCalibration {
+  /** Which feature basis the model was fit on. A stored model from an older
+   * basis would be silently misapplied to features it never saw, so a
+   * mismatch invalidates the calibration entirely. */
+  basis: number;
   model: ReturnType<typeof serialiseModel>;
   validationError: number | null;
   savedAt: number;
@@ -28,7 +33,9 @@ interface StoredCalibration {
 function loadStoredCalibration(): StoredCalibration | null {
   try {
     const raw = sessionStorage.getItem(CALIBRATION_KEY);
-    return raw ? (JSON.parse(raw) as StoredCalibration) : null;
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as StoredCalibration;
+    return stored.basis === FEATURE_BASIS_VERSION ? stored : null;
   } catch {
     return null;
   }
@@ -647,6 +654,7 @@ async function runSession(study: Study): Promise<void> {
     const model = engine.getModel();
     if (model) {
       storeCalibration({
+        basis: FEATURE_BASIS_VERSION,
         model: serialiseModel(model),
         validationError: outcome.validationError,
         savedAt: Date.now(),

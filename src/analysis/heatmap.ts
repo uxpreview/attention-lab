@@ -1,11 +1,18 @@
 /**
  * Heatmap rendering.
  *
- * Two passes: accumulate weighted radial gradients into an intensity buffer
- * (using additive compositing so the GPU does the Gaussian summation for us),
- * then map intensity through a colour ramp. Doing the colouring as a second
- * pass is what keeps overlapping blobs from banding — colour has to be applied
- * to the *summed* field, not per splat.
+ * Two passes: accumulate weighted Gaussian splats into a float intensity
+ * field, then map the summed field through a colour ramp. Doing the colouring
+ * as a second pass is what keeps overlapping blobs from banding — colour has
+ * to be applied to the *summed* field, not per splat.
+ *
+ * The accumulation is done in a Float32Array rather than by compositing
+ * radial gradients into a canvas: canvas channels are 8-bit, so a couple of
+ * dozen overlapping splats clip at 255 and flatten the hot end of a
+ * multi-participant map exactly where the density ordering matters most,
+ * while faint splats quantise into visible bands. Floats cost a few
+ * milliseconds at these sizes and let weights stay in real units (ms of
+ * dwell) instead of a canvas-friendly alpha mapping.
  */
 
 export interface HeatPoint {
@@ -86,7 +93,7 @@ export function renderHeatmap(
 
   const width = canvas.width;
   const height = canvas.height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d");
   if (!ctx || width === 0 || height === 0) return;
 
   ctx.clearRect(0, 0, width, height);
@@ -94,48 +101,52 @@ export function renderHeatmap(
 
   const radius = Math.max(12, Math.min(width, height) * radiusRatio);
 
-  // Pass 1: accumulate intensity in the alpha channel.
-  const acc = document.createElement("canvas");
-  acc.width = width;
-  acc.height = height;
-  const accCtx = acc.getContext("2d", { willReadFrequently: true });
-  if (!accCtx) return;
+  // Pass 1: accumulate a Gaussian splat per point into the float field.
+  const field = new Float32Array(width * height);
+  const sigma = radius / 2;
+  const twoSigmaSq = 2 * sigma * sigma;
+  // The kernel is truncated at `radius`; subtracting its value at the rim
+  // brings the splat smoothly to zero there instead of stepping off a ledge.
+  const rim = Math.exp(-(radius * radius) / twoSigmaSq);
 
-  let maxWeight = 0;
-  for (const p of points) maxWeight = Math.max(maxWeight, p.weight);
-  if (maxWeight <= 0) maxWeight = 1;
+  // Weights are usually fixation durations in ms. If a caller passes all-zero
+  // weights, fall back to counting points rather than rendering nothing.
+  const weighted = points.some((p) => p.weight > 0);
 
-  accCtx.globalCompositeOperation = "lighter";
   for (const p of points) {
+    const w = weighted ? Math.max(p.weight, 0) : 1;
+    if (w === 0) continue;
     const cx = p.x * width;
     const cy = p.y * height;
-    // Alpha per splat is deliberately low: intensity comes from accumulation,
-    // and letting a single splat saturate would hide density differences.
-    const alpha = Math.min(1, (p.weight / maxWeight) * 0.45 + 0.05);
-    const gradient = accCtx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-    gradient.addColorStop(0, `rgba(0,0,0,${alpha})`);
-    gradient.addColorStop(1, "rgba(0,0,0,0)");
-    accCtx.fillStyle = gradient;
-    accCtx.beginPath();
-    accCtx.arc(cx, cy, radius, 0, Math.PI * 2);
-    accCtx.fill();
-  }
+    const x0 = Math.max(0, Math.floor(cx - radius));
+    const x1 = Math.min(width - 1, Math.ceil(cx + radius));
+    const y0 = Math.max(0, Math.floor(cy - radius));
+    const y1 = Math.min(height - 1, Math.ceil(cy + radius));
 
-  const accData = accCtx.getImageData(0, 0, width, height);
-  const src = accData.data;
+    for (let py = y0; py <= y1; py++) {
+      const dy = py - cy;
+      const rowBase = py * width;
+      for (let px = x0; px <= x1; px++) {
+        const dx = px - cx;
+        const k = Math.exp(-(dx * dx + dy * dy) / twoSigmaSq) - rim;
+        if (k > 0) field[rowBase + px] += w * k;
+      }
+    }
+  }
 
   // Scale to a high percentile instead of the max so a single long dwell does
   // not compress the rest of the map into the cold end of the ramp.
-  const ceiling = percentileOfAlpha(src, percentile);
-  const scale = ceiling > 0 ? 255 / ceiling : 1;
+  const ceiling = fieldPercentile(field, percentile);
+  const scale = ceiling > 0 ? 255 / ceiling : 0;
 
   // Pass 2: colour the accumulated field.
   const out = ctx.createImageData(width, height);
   const dst = out.data;
 
-  for (let i = 0; i < src.length; i += 4) {
-    const raw = src[i + 3];
+  for (let j = 0; j < field.length; j++) {
+    const raw = field[j];
     if (raw === 0) continue;
+    const i = j * 4;
     const intensity = Math.min(255, Math.round(raw * scale));
     if (intensity === 0) continue;
 
@@ -168,8 +179,9 @@ export function renderHeatmap(
   if (style === "spotlight") {
     // Regions with no gaze at all get the full dim treatment — but not opaque
     // black, so the reader can still see what was ignored.
-    for (let i = 0; i < dst.length; i += 4) {
-      if (src[i + 3] === 0) {
+    for (let j = 0; j < field.length; j++) {
+      if (field[j] === 0) {
+        const i = j * 4;
         dst[i] = 0;
         dst[i + 1] = 0;
         dst[i + 2] = 0;
@@ -183,23 +195,36 @@ export function renderHeatmap(
   ctx.putImageData(out, 0, 0);
 }
 
-function percentileOfAlpha(data: Uint8ClampedArray, percentile: number): number {
-  const histogram = new Uint32Array(256);
+/**
+ * Approximate percentile of the non-zero entries of an intensity field, via a
+ * 1024-bin histogram against the maximum — plenty of resolution for a display
+ * ceiling, and O(n) where an exact sort of a megapixel field would not be.
+ * Exported for the test suite.
+ */
+export function fieldPercentile(field: Float32Array, percentile: number): number {
+  const BINS = 1024;
+  let max = 0;
+  for (let i = 0; i < field.length; i++) {
+    if (field[i] > max) max = field[i];
+  }
+  if (max <= 0) return 0;
+
+  const histogram = new Uint32Array(BINS);
   let count = 0;
-  for (let i = 3; i < data.length; i += 4) {
-    const v = data[i];
+  for (let i = 0; i < field.length; i++) {
+    const v = field[i];
     if (v > 0) {
-      histogram[v]++;
+      histogram[Math.min(BINS - 1, Math.floor((v / max) * BINS))]++;
       count++;
     }
   }
-  if (count === 0) return 0;
 
   const target = count * percentile;
   let running = 0;
-  for (let v = 1; v < 256; v++) {
-    running += histogram[v];
-    if (running >= target) return v;
+  for (let b = 0; b < BINS; b++) {
+    running += histogram[b];
+    // The upper edge of the bin that crosses the target rank.
+    if (running >= target) return ((b + 1) / BINS) * max;
   }
-  return 255;
+  return max;
 }

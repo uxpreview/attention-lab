@@ -30,6 +30,20 @@ const FOREHEAD = 10;
 /** Number of entries in the vector returned by {@link buildFeatureVector}. */
 export const FEATURE_DIM = 22;
 
+/**
+ * Bumped whenever the basis changes shape, order, or meaning. Persisted
+ * calibrations carry this so an old model is invalidated rather than silently
+ * applied to features it was never fit on.
+ */
+export const FEATURE_BASIS_VERSION = 2;
+
+/** Per-eye openness below which the lid is occluding the iris (blink). */
+export const BLINK_CLOSE_OPENNESS = 0.16;
+/** Openness a closing eye must recover past before frames are trusted again.
+ * Higher than the close threshold on purpose: hysteresis stops a half-open
+ * lid from flickering the tracker on and off mid-blink. */
+export const BLINK_OPEN_OPENNESS = 0.2;
+
 export interface Point2 {
   x: number;
   y: number;
@@ -40,7 +54,8 @@ export interface EyeState {
   iris: Point2;
   /** Iris offset from the eye centre, normalised by eye width. */
   offset: Point2;
-  /** Lid separation over eye width. Below ~0.18 the eye is effectively shut. */
+  /** Lid separation over eye width. Below {@link BLINK_CLOSE_OPENNESS} the
+   * lid is far enough down to occlude the iris. */
   openness: number;
 }
 
@@ -134,7 +149,20 @@ function headPose(matrix: number[] | undefined): { yaw: number; pitch: number; r
       roll: Math.atan2(r10, r00),
     };
   }
-  return { pitch: Math.atan2(-r21, r22), yaw: Math.atan2(-r20, sy), roll: 0 };
+
+  // Gimbal lock: cos(yaw) ~ 0, so pitch and roll are no longer separable.
+  // Standard fallback for the Rz*Ry*Rx decomposition (Slabaugh, "Computing
+  // Euler angles from a rotation matrix"): fix roll = 0 and read the combined
+  // angle from the first row, whose sign depends on which pole yaw hit.
+  // Unreachable in practice — isUsableFace rejects |yaw| > 0.7 rad long before
+  // this — but kept correct for anyone checking the maths.
+  const r01 = matrix[4];
+  const r02 = matrix[8];
+  return {
+    pitch: r20 < 0 ? Math.atan2(r01, r02) : Math.atan2(-r01, -r02),
+    yaw: Math.atan2(-r20, sy),
+    roll: 0,
+  };
 }
 
 /**
@@ -195,20 +223,26 @@ export function readFaceState(
 
 /**
  * Builds the regression basis. Order matters only in that it must stay stable
- * between fitting and prediction — and across persisted calibrations, so append
- * rather than insert if this ever grows.
+ * between fitting and prediction — bump {@link FEATURE_BASIS_VERSION} on any
+ * change so persisted calibrations are invalidated rather than silently
+ * misread.
  */
 export function buildFeatureVector(face: FaceState): number[] {
+  // Mean-and-difference parameterisation of the two eyes: dx/dy carry gaze
+  // direction, vx/vy carry vergence — the eyes' disagreement, a direct
+  // viewing-distance cue. The raw per-eye offsets are deliberately absent:
+  // they are exact linear combinations of these four, and feeding both would
+  // leave ridge splitting weight arbitrarily between collinear columns.
   const dx = (face.left.offset.x + face.right.offset.x) / 2;
   const dy = (face.left.offset.y + face.right.offset.y) / 2;
+  const vx = face.left.offset.x - face.right.offset.x;
+  const vy = face.left.offset.y - face.right.offset.y;
 
   return [
-    face.left.offset.x,
-    face.left.offset.y,
-    face.right.offset.x,
-    face.right.offset.y,
     dx,
     dy,
+    vx,
+    vy,
     dx * dx,
     dy * dy,
     dx * dy,
@@ -219,9 +253,13 @@ export function buildFeatureVector(face: FaceState): number[] {
     face.headY,
     face.scale,
     // Interaction terms: the same iris offset maps to a different screen point
-    // depending on head pose and distance.
+    // depending on head pose and distance. Both same-axis and cross-axis pose
+    // pairs are here because a webcam above or below the eye line couples
+    // horizontal iris offset with vertical pose, and vice versa.
     dx * face.yaw,
     dy * face.pitch,
+    dx * face.pitch,
+    dy * face.yaw,
     dx * face.headX,
     dy * face.headY,
     dx * face.scale,
@@ -235,7 +273,9 @@ export function buildFeatureVector(face: FaceState): number[] {
  * and faces so far off-centre that the mesh is unreliable.
  */
 export function isUsableFace(face: FaceState): boolean {
-  if (face.openness < 0.16) return false;
+  // Gate on the more closed eye, not the mean: a one-eyed wink halves the
+  // gaze signal but barely moves the average.
+  if (Math.min(face.left.openness, face.right.openness) < BLINK_CLOSE_OPENNESS) return false;
   if (Math.abs(face.yaw) > 0.7 || Math.abs(face.pitch) > 0.7) return false;
   if (face.headX < 0.05 || face.headX > 0.95) return false;
   if (face.headY < 0.05 || face.headY > 0.95) return false;

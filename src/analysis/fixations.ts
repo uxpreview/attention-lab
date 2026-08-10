@@ -44,22 +44,6 @@ export interface FixationOptions {
   maxGap?: number;
 }
 
-function dispersionOf(points: RawPoint[], from: number, to: number): number {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (let i = from; i <= to; i++) {
-    const p = points[i];
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  // Salvucci & Goldberg's cheap dispersion measure: summed ranges, not spread.
-  return maxX - minX + (maxY - minY);
-}
-
 export function detectFixations(points: RawPoint[], options: FixationOptions = {}): Fixation[] {
   const dispersion = options.dispersion ?? 45;
   const minDuration = options.minDuration ?? 100;
@@ -89,18 +73,40 @@ export function detectFixations(points: RawPoint[], options: FixationOptions = {
       continue;
     }
 
-    if (dispersionOf(points, start, end) > dispersion) {
+    // Salvucci & Goldberg's cheap dispersion measure: summed x and y ranges,
+    // not spread. The bounds are kept as running min/max — the window start is
+    // pinned from here on and points are only appended, so each candidate
+    // point updates them in O(1) instead of rescanning the whole window.
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = start; i <= end; i++) {
+      const p = points[i];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    if (maxX - minX + (maxY - minY) > dispersion) {
       // The eye was moving through this window: not a fixation, advance one.
       start++;
       continue;
     }
 
     // Window qualifies; extend it while it stays compact and continuous.
-    while (
-      end + 1 < points.length &&
-      points[end + 1].t - points[end].t <= maxGap &&
-      dispersionOf(points, start, end + 1) <= dispersion
-    ) {
+    while (end + 1 < points.length && points[end + 1].t - points[end].t <= maxGap) {
+      const p = points[end + 1];
+      const nextMinX = Math.min(minX, p.x);
+      const nextMaxX = Math.max(maxX, p.x);
+      const nextMinY = Math.min(minY, p.y);
+      const nextMaxY = Math.max(maxY, p.y);
+      if (nextMaxX - nextMinX + (nextMaxY - nextMinY) > dispersion) break;
+      minX = nextMinX;
+      maxX = nextMaxX;
+      minY = nextMinY;
+      maxY = nextMaxY;
       end++;
     }
 
@@ -115,6 +121,9 @@ export function detectFixations(points: RawPoint[], options: FixationOptions = {
     fixations.push({
       x: sumX / count,
       y: sumY / count,
+      // Inter-sample span, the usual I-DT convention: the last sample's own
+      // dwell (~one frame) is not counted. Worth knowing when comparing AOI
+      // dwell sums against wall-clock time.
       duration: points[end].t - points[start].t,
       start: points[start].t,
       samples: count,
