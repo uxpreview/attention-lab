@@ -16,6 +16,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
+    // Off deliberately: regression.ts and heatmap.ts are hand-indexed typed-array
+    // maths where the loops own their bounds, and `| undefined` on every element
+    // access would bury the numerics under non-null assertions.
     "noUncheckedIndexedAccess": false
   },
   "include": ["src", "scripts"]

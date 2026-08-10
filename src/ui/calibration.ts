@@ -1,5 +1,6 @@
+import { ERROR_BAD_DEG, ERROR_GOOD_DEG, pxToDegrees } from "../analysis/quality";
 import type { CalibrationSample, GazeEngine } from "../tracker/gaze";
-import { el, sleep } from "./dom";
+import { confirmButton, el, inertSiblings, sleep } from "./dom";
 
 /**
  * Calibration and validation flow.
@@ -31,41 +32,200 @@ const VALIDATION_POINTS: Array<[number, number]> = [
 const SETTLE_MS = 350;
 /** Milliseconds of samples to collect per point. */
 const DWELL_MS = 900;
+/** How long the participant has to hold their gaze after clicking. */
+const HOLD_MS = SETTLE_MS + DWELL_MS;
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+/** Ring geometry, in the ring's own 48-unit viewBox. */
+const RING_RADIUS = 21;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * A determinate ring around the active dot, sweeping over the settle + dwell
+ * window.
+ *
+ * Before this, the only cue that sampling was in progress was a colour swap,
+ * and the instructions said "keep looking until it stops pulsing" — the exact
+ * inverse of the truth, because the dot stops pulsing when it is clicked, at
+ * the *start* of the hold. A participant who let go on that cue gave every
+ * point 0ms of usable dwell, and nothing about the resulting calibration would
+ * have looked wrong.
+ *
+ * Driven by the Web Animations API rather than CSS: the page neutralises every
+ * CSS animation under prefers-reduced-motion, and this one is a progress
+ * readout rather than decoration — removing it would take the only cue with it.
+ */
+function calibrationRing(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "calib-ring");
+  svg.setAttribute("viewBox", "0 0 48 48");
+  svg.setAttribute("aria-hidden", "true");
+
+  const track = document.createElementNS(SVG_NS, "circle");
+  track.setAttribute("class", "calib-ring-track");
+  track.setAttribute("cx", "24");
+  track.setAttribute("cy", "24");
+  track.setAttribute("r", String(RING_RADIUS));
+
+  const sweep = document.createElementNS(SVG_NS, "circle");
+  sweep.setAttribute("class", "calib-ring-sweep");
+  sweep.setAttribute("cx", "24");
+  sweep.setAttribute("cy", "24");
+  sweep.setAttribute("r", String(RING_RADIUS));
+  sweep.setAttribute("stroke-dasharray", String(RING_CIRCUMFERENCE));
+  sweep.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE));
+
+  svg.append(track, sweep);
+  return svg;
+}
+
+/** Starts the sweep and returns a function that stops and resets it. */
+function sweepRing(dot: HTMLElement): () => void {
+  const sweep = dot.querySelector<SVGCircleElement>(".calib-ring-sweep");
+  if (!sweep || typeof sweep.animate !== "function") return () => {};
+  const animation = sweep.animate(
+    [{ strokeDashoffset: RING_CIRCUMFERENCE }, { strokeDashoffset: 0 }],
+    { duration: HOLD_MS, easing: "linear", fill: "forwards" }
+  );
+  return () => animation.cancel();
+}
 
 export interface CalibrationOutcome {
   cancelled: boolean;
   /** Mean validation error in CSS pixels, or null if validation was skipped. */
   validationError: number | null;
-  /** Per-point validation errors, for the quality readout. */
-  pointErrors: number[];
 }
 
 export async function runCalibration(
   engine: GazeEngine,
   host: HTMLElement
 ): Promise<CalibrationOutcome> {
-  const overlay = el("div", { class: "calib-overlay" });
-  const instruction = el(
-    "div",
-    { class: "calib-instruction" },
-    el("h2", {}, "Calibration"),
-    el(
-      "p",
-      {},
-      "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until it stops pulsing."
-    ),
-    el("p", { class: "calib-progress" }, `0 / ${CALIBRATION_POINTS.length}`)
+  const overlay = el("div", {
+    class: "calib-overlay",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Calibration",
+    tabindex: "-1",
+  });
+  const heading = el("h2", {}, "Calibration");
+  const guidance = el(
+    "p",
+    { class: "calib-guidance" },
+    "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until the ring around it completes. Esc cancels."
   );
-  const dot = el("button", { class: "calib-dot", type: "button" });
-  overlay.append(instruction, dot);
+  // What survives the dimming. The full block used to go to opacity 0 after the
+  // first dot, leaving seventeen more clicks with no statement of the one rule
+  // that decides whether the calibration is worth anything — and the rule is
+  // not guessable: a participant who lets go on the click gives every point
+  // zero usable dwell, and nothing downstream looks wrong. Dimmed, the block
+  // keeps this line and moves out of the middle of the screen, where the
+  // centre dot is.
+  const shortGuidance = el(
+    "p",
+    { class: "calib-short" },
+    "Click the dot, then keep looking at it until the ring fills. Esc cancels."
+  );
+  const instruction = el("div", { class: "calib-instruction" }, heading, guidance, shortGuidance);
+  // The counter lives outside the instruction block: the instructions dim
+  // after the first dot, and progress is the one thing that has to stay
+  // visible for all eighteen clicks — it is what buys participant patience.
+  //
+  // It used to be the quietest thing on the screen it was carrying: 14px in a
+  // low-contrast grey-teal, centred at the foot of the window — 42px from where
+  // the y=0.92 dot row lands, so through the bottom third of the sequence the
+  // counter sat inside the halo of the dot the participant was aiming at. And a
+  // bare fraction is not progress for an eighteen-step sequence that changes
+  // its own denominator halfway through: "Calibration 1 / 13" says nothing
+  // about the five dots that follow it. So: a determinate bar across both
+  // phases, a louder counter, a line naming what comes next, and a corner
+  // anchor that steps out of the dot's way (see keepStatusClear).
+  const progress = el("p", { class: "calib-progress", role: "status" });
+  const progressFill = el("div", { class: "calib-bar-fill" });
+  const progressTrack = el("div", { class: "calib-bar", "aria-hidden": "true" }, progressFill);
+  const phaseNote = el("p", { class: "calib-phase" });
+  /**
+   * The one condition that invalidates the whole sequence, said while it is
+   * still recoverable.
+   *
+   * The recording stage has flagged a lost face since it was built; calibration
+   * did not, and calibration is where it costs the most. A participant who
+   * drifts out of frame at dot 3 goes on to click ten more dots collecting
+   * nothing, and finds out at the end via "Not enough calibration data" —
+   * a minute of session time spent, and the sequence starts again. The dot's
+   * ring turns warn-coloured and this line appears beside the counter.
+   */
+  const lostHint = el(
+    "p",
+    { class: "calib-lost", role: "status", hidden: true },
+    "Face lost — move back into frame and check your lighting"
+  );
+  const dot = el(
+    "button",
+    { class: "calib-dot", type: "button", "aria-label": "Calibration point" },
+    calibrationRing()
+  );
+  // Two-step, like every other destructive control in the app: this one throws
+  // away up to thirty seconds of a participant's work with no undo, and it
+  // shares a corner with the dots. It also gets out of the way entirely when a
+  // dot lands near it — see keepCancelClear.
+  const cancelBtn = confirmButton(
+    "Cancel",
+    "Stop calibration?",
+    () => cancel(),
+    "btn btn-ghost btn-small calib-cancel"
+  );
+  // One block in a corner: where you are, how far that is through the whole
+  // sequence, what follows, and the reason the counter has stopped meaning
+  // anything.
+  const status = el(
+    "div",
+    { class: "calib-status" },
+    progress,
+    progressTrack,
+    phaseNote,
+    lostHint
+  );
+  overlay.append(instruction, status, dot, cancelBtn);
   host.append(overlay);
 
-  const progress = instruction.querySelector(".calib-progress") as HTMLElement;
+  /** Every dot the participant is asked to click, both phases together. The
+   * bar spans this rather than restarting at the accuracy check, because what a
+   * participant wants to know is how much of *this* is left. */
+  const TOTAL_POINTS = CALIBRATION_POINTS.length + VALIDATION_POINTS.length;
+  const setProgress = (done: number, label: string, phase: string): void => {
+    progress.textContent = label;
+    phaseNote.textContent = phase;
+    progressFill.style.width = `${Math.min(100, (done / TOTAL_POINTS) * 100)}%`;
+  };
+
+  const restoreBackground = inertSiblings(host, overlay);
+  overlay.focus();
+
+  // Same subscription the recording stage uses, so "face lost" cannot mean two
+  // different things in two phases of the same session.
+  let faceLost = false;
+  const offStatus = engine.onStatus((status) => {
+    const lost = !status.faceVisible;
+    if (lost === faceLost) return;
+    faceLost = lost;
+    dot.classList.toggle("is-lost", lost);
+    lostHint.hidden = !lost;
+  });
+
   const samples: CalibrationSample[] = [];
   let cancelled = false;
 
+  // One cancellation path for the Escape key and the on-screen button: both
+  // abort whatever wait is in flight, and the loops check the flag between
+  // points. Escape fires immediately — a deliberate keystroke is already the
+  // second step — while the button arms first (see cancelBtn above).
+  const abort = new AbortController();
+  const cancel = () => {
+    cancelled = true;
+    abort.abort();
+  };
   const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape") cancelled = true;
+    if (event.key === "Escape") cancel();
   };
   window.addEventListener("keydown", onKey);
 
@@ -73,33 +233,57 @@ export async function runCalibration(
     for (let i = 0; i < CALIBRATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = CALIBRATION_POINTS[i];
-      progress.textContent = `${i} / ${CALIBRATION_POINTS.length}`;
-      const collected = await collectAtPoint(engine, dot, nx, ny, samples);
-      if (!collected) {
+      // Phase-labelled, because an unlabelled counter restarting at "1 / 5"
+      // after thirteen dots reads as the whole thing starting over — and the
+      // phase line says at dot 1 that a second phase is coming, rather than
+      // springing it after thirteen clicks.
+      setProgress(
+        i + 1,
+        `Calibration ${i + 1} / ${CALIBRATION_POINTS.length}`,
+        `Then a ${VALIDATION_POINTS.length}-dot accuracy check`
+      );
+      keepCancelClear(cancelBtn, nx, ny);
+      keepStatusClear(status, nx, ny);
+      let collected: CollectResult;
+      do {
+        collected = await collectAtPoint(engine, dot, nx, ny, samples, abort.signal);
+      } while (collected === "retry");
+      if (collected === "abandoned") {
         cancelled = true;
         break;
       }
-      // Hide the instruction panel after the first point so it stops competing
-      // for attention with the dot the participant is meant to be looking at.
+      // Dim the instruction panel after the first point so it stops competing
+      // for attention with the dot — down to one line, moved out of the centre
+      // of the screen. It used to go to opacity 0, which took the only
+      // statement of the rule that decides whether any of this is usable.
       if (i === 0) instruction.classList.add("is-dim");
     }
 
-    if (cancelled) return { cancelled: true, validationError: null, pointErrors: [] };
+    if (cancelled) return { cancelled: true, validationError: null };
 
-    progress.textContent = "Fitting model…";
+    setProgress(CALIBRATION_POINTS.length, "Fitting model…", "One moment");
     engine.calibrate(samples);
 
     instruction.classList.remove("is-dim");
-    (instruction.querySelector("h2") as HTMLElement).textContent = "Accuracy check";
-    (instruction.querySelector("p") as HTMLElement).textContent =
-      "Five more dots. These measure how accurate the calibration actually is.";
+    heading.textContent = "Accuracy check";
+    guidance.textContent =
+      "Five more dots — the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
 
     const pointErrors: number[] = [];
     for (let i = 0; i < VALIDATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = VALIDATION_POINTS[i];
-      progress.textContent = `${i} / ${VALIDATION_POINTS.length}`;
-      const error = await measureAtPoint(engine, dot, nx, ny);
+      setProgress(
+        CALIBRATION_POINTS.length + i + 1,
+        `Accuracy check ${i + 1} / ${VALIDATION_POINTS.length}`,
+        "The last of it"
+      );
+      keepCancelClear(cancelBtn, nx, ny);
+      keepStatusClear(status, nx, ny);
+      let error: number | "retry" | null;
+      do {
+        error = await measureAtPoint(engine, dot, nx, ny, abort.signal);
+      } while (error === "retry");
       if (error === null) {
         cancelled = true;
         break;
@@ -109,17 +293,77 @@ export async function runCalibration(
     }
 
     if (cancelled || pointErrors.length === 0) {
-      return { cancelled, validationError: null, pointErrors };
+      return { cancelled, validationError: null };
     }
 
     const mean = pointErrors.reduce((a, b) => a + b, 0) / pointErrors.length;
-    return { cancelled: false, validationError: mean, pointErrors };
+    return { cancelled: false, validationError: mean };
   } finally {
     window.removeEventListener("keydown", onKey);
+    offStatus();
     engine.stopCollecting();
+    restoreBackground();
     overlay.remove();
   }
 }
+
+/** Clearance kept between a calibration dot and the Cancel button, in pixels. */
+const CANCEL_CLEARANCE = 120;
+
+/**
+ * Gets Cancel out of the way of the dot.
+ *
+ * Cancel is in the bottom-left corner, which no calibration or validation point
+ * occupies — but the corner points still come within a dot's halo of it at some
+ * viewport sizes, and the two nearest, [0.08, 0.92] and [0.2, 0.8], are the ones
+ * a participant aims at hardest. A 10px overshoot landing on Cancel used to
+ * abort the whole calibration on a single click. Now the button both arms
+ * before it fires and vanishes while a dot is anywhere near it; Esc stays
+ * available throughout and the dimmed instruction line keeps saying so.
+ */
+function keepCancelClear(cancelBtn: HTMLElement, nx: number, ny: number): void {
+  const x = nx * window.innerWidth;
+  const y = ny * window.innerHeight;
+  const rect = cancelBtn.getBoundingClientRect();
+  const dx = Math.max(rect.left - x, 0, x - rect.right);
+  const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+  cancelBtn.classList.toggle("is-away", Math.hypot(dx, dy) < CANCEL_CLEARANCE);
+}
+
+/**
+ * Gets the progress block out of the way of the dot, without ever hiding it.
+ *
+ * Cancel can simply vanish when a dot comes near it; the counter cannot — it is
+ * what buys eighteen clicks of patience. So it has two anchors instead: bottom
+ * right by default, top right when a dot lands near the bottom right. At most
+ * one of the two can be contested at a time, because the flip is only triggered
+ * by a dot that is itself in the bottom corner.
+ *
+ * The clearance is measured against the *default* anchor's box rather than the
+ * element's current one. Measuring where it happens to be would make the
+ * decision depend on the previous decision: flipped to the top and then asked
+ * about a bottom-right dot, it would read "far away", drop back down, and land
+ * on the dot it was avoiding.
+ */
+function keepStatusClear(status: HTMLElement, nx: number, ny: number): void {
+  const x = nx * window.innerWidth;
+  const y = ny * window.innerHeight;
+  const box = status.getBoundingClientRect();
+  // Mirrors .calib-status's inset in styles.css.
+  const inset = 18;
+  const right = window.innerWidth - inset;
+  const bottom = window.innerHeight - inset;
+  const left = right - box.width;
+  const top = bottom - box.height;
+  const dx = Math.max(left - x, 0, x - right);
+  const dy = Math.max(top - y, 0, y - bottom);
+  status.classList.toggle("is-flipped", Math.hypot(dx, dy) < STATUS_CLEARANCE);
+}
+
+/** Clearance kept between a dot and the progress block, in pixels. Larger than
+ * the Cancel button's, because this block is wider and taller than that pill
+ * and a participant aiming at a corner dot should not have text under it. */
+const STATUS_CLEARANCE = 150;
 
 function placeDot(dot: HTMLElement, nx: number, ny: number): { x: number; y: number } {
   const x = nx * window.innerWidth;
@@ -129,55 +373,94 @@ function placeDot(dot: HTMLElement, nx: number, ny: number): { x: number; y: num
   return { x, y };
 }
 
-/** Resolves false if the participant abandoned the point (window blur, escape). */
+type CollectResult = "ok" | "retry" | "abandoned";
+
+/**
+ * Collects dwell samples at one dot. Resolves "retry" if the window lost
+ * focus mid-dwell — a notification or an alt-tab takes the eyes with it, and
+ * samples collected anyway would fold silently into the model as a
+ * consistent, invisible bias — so that point's samples are discarded and the
+ * same dot is presented again. Resolves "abandoned" on cancel.
+ */
 async function collectAtPoint(
   engine: GazeEngine,
   dot: HTMLButtonElement,
   nx: number,
   ny: number,
-  into: CalibrationSample[]
-): Promise<boolean> {
+  into: CalibrationSample[],
+  signal: AbortSignal
+): Promise<CollectResult> {
   const { x, y } = placeDot(dot, nx, ny);
   dot.classList.remove("is-active");
 
-  const clicked = await waitForClick(dot);
-  if (!clicked) return false;
+  const clicked = await waitForClick(dot, signal);
+  if (!clicked) return "abandoned";
 
   dot.classList.add("is-active");
-  await sleep(SETTLE_MS);
+  const stopRing = sweepRing(dot);
 
+  let blurred = false;
+  const onBlur = () => {
+    blurred = true;
+  };
+  window.addEventListener("blur", onBlur);
+  const before = into.length;
+
+  await sleep(SETTLE_MS);
   engine.startCollecting(x, y, into);
   await sleep(DWELL_MS);
   engine.stopCollecting();
 
+  window.removeEventListener("blur", onBlur);
+  stopRing();
   dot.classList.remove("is-active");
-  return true;
+
+  if (signal.aborted) return "abandoned";
+  if (blurred) {
+    into.length = before;
+    return "retry";
+  }
+  return "ok";
 }
 
-/** Returns the mean gaze error at this point in pixels, or null if abandoned. */
+/** Returns the median gaze error at this point in pixels, "retry" if focus
+ * was lost mid-dwell (same reasoning as collection), or null if abandoned. */
 async function measureAtPoint(
   engine: GazeEngine,
   dot: HTMLButtonElement,
   nx: number,
-  ny: number
-): Promise<number | null> {
+  ny: number,
+  signal: AbortSignal
+): Promise<number | "retry" | null> {
   const { x, y } = placeDot(dot, nx, ny);
   dot.classList.remove("is-active");
 
-  const clicked = await waitForClick(dot);
+  const clicked = await waitForClick(dot, signal);
   if (!clicked) return null;
 
   dot.classList.add("is-active");
-  await sleep(SETTLE_MS);
+  const stopRing = sweepRing(dot);
 
+  let blurred = false;
+  const onBlur = () => {
+    blurred = true;
+  };
+  window.addEventListener("blur", onBlur);
+
+  await sleep(SETTLE_MS);
   const errors: number[] = [];
   const off = engine.onGaze((sample) => {
     errors.push(Math.hypot(sample.x - x, sample.y - y));
   });
   await sleep(DWELL_MS);
   off();
+
+  window.removeEventListener("blur", onBlur);
+  stopRing();
   dot.classList.remove("is-active");
 
+  if (signal.aborted) return null;
+  if (blurred) return "retry";
   if (errors.length === 0) return Infinity;
   // Median rather than mean: a single blink-adjacent outlier should not decide
   // whether we tell the researcher their calibration is good.
@@ -185,24 +468,26 @@ async function measureAtPoint(
   return errors[Math.floor(errors.length / 2)];
 }
 
-function waitForClick(dot: HTMLButtonElement): Promise<boolean> {
+function waitForClick(dot: HTMLButtonElement, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
     const onClick = () => {
       cleanup();
       resolve(true);
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        cleanup();
-        resolve(false);
-      }
+    const onAbort = () => {
+      cleanup();
+      resolve(false);
     };
     const cleanup = () => {
       dot.removeEventListener("click", onClick);
-      window.removeEventListener("keydown", onKey);
+      signal.removeEventListener("abort", onAbort);
     };
     dot.addEventListener("click", onClick);
-    window.addEventListener("keydown", onKey);
+    signal.addEventListener("abort", onAbort);
   });
 }
 
@@ -210,7 +495,9 @@ function waitForClick(dot: HTMLButtonElement): Promise<boolean> {
  * Turns validation error into language a researcher can act on. The thresholds
  * are in degrees of visual angle at an assumed 60cm viewing distance, which is
  * the unit eye-tracking literature uses; commercial trackers claim 0.5°, and
- * webcam tracking lands around 1.5-3° on a good day.
+ * webcam tracking lands around 1.5-3° on a good day. They live in
+ * analysis/quality.ts, shared with the results screen's quality flags, so the
+ * word "poor" here and a flagged row there can never mean different things.
  */
 export function describeAccuracy(errorPx: number | null): {
   grade: "good" | "usable" | "poor" | "unknown";
@@ -222,14 +509,14 @@ export function describeAccuracy(errorPx: number | null): {
   }
 
   const degrees = pxToDegrees(errorPx);
-  if (degrees < 2) {
+  if (degrees < ERROR_GOOD_DEG) {
     return {
       grade: "good",
       label: `Good: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
       detail: "Reliable enough for region-level conclusions on a wireframe.",
     };
   }
-  if (degrees < 4) {
+  if (degrees < ERROR_BAD_DEG) {
     return {
       grade: "usable",
       label: `Usable: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
@@ -241,14 +528,4 @@ export function describeAccuracy(errorPx: number | null): {
     label: `Poor: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
     detail: "Recalibrate: improve lighting, sit square to the screen, and stay still.",
   };
-}
-
-/**
- * Converts pixels to approximate degrees of visual angle. Assumes ~96 CSS ppi
- * and a 60cm viewing distance — both are rough, which is why the UI always
- * shows the raw pixel figure alongside.
- */
-export function pxToDegrees(px: number, viewingDistanceCm = 60): number {
-  const cm = (px / 96) * 2.54;
-  return (Math.atan2(cm, viewingDistanceCm) * 180) / Math.PI;
 }

@@ -4,12 +4,31 @@
   "private": true,
   "type": "module",
   "description": "Webcam-based eye tracking for wireframe and webpage attention studies",
+  "keywords": [
+    "eye-tracking",
+    "gaze-estimation",
+    "webcam",
+    "heatmap",
+    "mediapipe",
+    "ux-research"
+  ],
+  "license": "MIT",
+  "author": "Ryan McCarty (https://ryankm.com)",
+  "homepage": "https://attention.ryankm.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uxpreview/attention-lab.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "esbuild src/tests/run.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/tests.mjs && node node_modules/.cache/tests.mjs",
+    "figures": "esbuild scripts/make-figures.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/figures.mjs && node node_modules/.cache/figures.mjs",
     "fetch-model": "node scripts/fetch-model.mjs"
   },
   "dependencies": {

@@ -27,9 +27,8 @@ export interface Recording {
   studyId: string;
   participant: string;
   createdAt: number;
-  /** Timestamp of the first sample, used as the zero for TTFF. */
-  startedAt: number;
-  /** Gaze in normalised stimulus coordinates, times relative to startedAt. */
+  /** Gaze in normalised stimulus coordinates, times in ms relative to the
+   * recording's first sample — so t=0 is the moment gaze first arrived. */
   points: Array<{ x: number; y: number; t: number }>;
   /** Quality metadata captured at recording time. */
   quality: RecordingQuality;

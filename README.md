@@ -5,6 +5,30 @@ participant a task, and get back a heatmap, a scanpath, and per-region
 attention numbers. Everything runs in the browser — no video, gaze data, or
 images ever leave the machine.
 
+**Try it: [attention.ryankm.com](https://attention.ryankm.com/)** — a webcam, a
+desktop browser, and about 90 seconds to calibrate. EXP-038 in
+[the Lab](https://ryankm.com/lab).
+
+Vanilla TypeScript and Vite, one runtime dependency (MediaPipe's face
+landmarker), no framework, no server, no analytics.
+
+![An aggregate attention heatmap over a wireframe: heat pooled on the headline, the hero image, the call to action, and the middle pricing card.](docs/figures/heatmap.png)
+
+Six recordings against one task, aggregated — then the same data as a
+spotlight, which dims what nobody looked at, and as one participant's scanpath,
+numbered in reading order and sized by dwell:
+
+![Left: the same wireframe under the spotlight view, everything but the attended regions dimmed. Right: a numbered scanpath, circles joined by saccade lines, running dark to light over time.](docs/figures/spotlight-scanpath.png)
+
+The session behind those figures is synthetic, and they are drawn by the app's
+own renderers running headlessly — `npm run figures` regenerates them. So the
+pictures cannot drift from what the app actually draws, and no participant data
+comes anywhere near this repository.
+
+## Quickstart
+
+Node 20 or newer.
+
 ```
 npm install
 npm run dev      # http://localhost:5173
@@ -43,17 +67,37 @@ reconstructed from a normal webcam image:
    in the saccades between them, so heatmaps are built from fixation centroids
    weighted by dwell rather than from raw samples.
 
+## Design decisions
+
+[`docs/session-log.md`](docs/session-log.md) is the build log: MediaPipe over
+WebGazer, ridge regression over a small neural net, One Euro over an
+exponential moving average, I-DT fixations over raw-sample heatmaps — each with
+the alternative that was rejected and the reason. It also carries the
+off-by-one in the fixation window that the synthetic-eye suite caught, where
+every recording would have produced zero fixations and every heatmap would have
+rendered empty; what is verified and what is not; and what is still open.
+
 ## What you get
 
-- **Heatmap** — dwell-weighted attention, scaled to the 98th percentile so one
-  long stare does not flatten everything else.
-- **Spotlight** — the inverse: dims what was ignored. Usually the more
-  persuasive version in a readout.
+- **Heatmap** — dwell-weighted attention, scaled to a high percentile of the
+  per-blob peaks rather than of the pixels, so one long stare saturates without
+  flattening every other cluster into the clear end of the ramp. The ramp
+  itself starts fully transparent: a region nobody fixated is left unpainted
+  rather than tinted a cold colour that reads as attention it never got.
+- **Spotlight** — the inverse: dims what was ignored. The dim stops short of
+  black so the rest of the screen survives as context, and a fully revealed area
+  is the stimulus at full strength, never brighter. Usually the more persuasive
+  version in a readout.
 - **Contours** — banded isolines, easier to cite exact regions from.
-- **Scanpath** — numbered fixations sized by dwell, in reading order. Per
-  participant, since an averaged scanpath is meaningless.
+- **Scanpath** — numbered fixations sized by dwell, in reading order, on a
+  viridis ramp so first-to-last reads as an ordering in greyscale and under
+  colour vision deficiency. Where fixations pile up, only the longest are
+  numbered, and they are numbered 1, 2, 3 over those marks — every fixation's
+  true position in the sequence is in the exported CSV. Per participant, since
+  an averaged scanpath is meaningless.
 - **Areas of interest** — draw boxes on the stimulus and get hit rate, dwell
-  time, and time-to-first-fixation per region, aggregated across participants.
+  time, and time-to-first-fixation per region, aggregated across participants,
+  sortable, with a bar in each cell because the ranking is the finding.
 - **Exports** — PNG overlay at the stimulus's native resolution, plus raw gaze,
   fixation, and AOI CSVs and a session JSON.
 
@@ -120,18 +164,23 @@ src/
   data/        IndexedDB persistence, CSV/JSON/PNG export
   ui/          study setup, calibration, recording, results
   tests/       headless checks for the maths
+scripts/       model vendoring, README figure generation
+docs/          engineering log, README figures, design sources
 ```
 
 ## Tests
 
 ```
 npm test
+npm run typecheck
 ```
 
-Runs the gaze model against a simulated eye — a forward model that turns a
-screen target plus head pose into iris offsets — and asserts the pipeline
-recovers screen positions it was never trained on, including under head drift.
-Also covers fixation detection, the smoothing filter, and AOI statistics.
+The suite runs the gaze model against a simulated eye — a forward model that
+turns a screen target plus head pose into iris offsets — and asserts the
+pipeline recovers screen positions it was never trained on, including under
+head drift. Also covers fixation detection, the smoothing filter, overlay
+painting, and AOI statistics. `npm run build` runs `tsc` first and refuses to
+emit on a type error.
 
 ## Privacy
 
@@ -146,4 +195,10 @@ participate in research.
 
 A Chromium-based browser or Safari 16.4+, a webcam, and a secure context
 (`localhost` or HTTPS — `getUserMedia` will not run over plain HTTP on a LAN
-address).
+address). A phone can read a study and open results recorded elsewhere, but
+cannot run a session: the camera is too close and too far off-axis, and
+calibration would ask you to cover the target with your thumb.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Built by [Ryan McCarty](https://ryankm.com).

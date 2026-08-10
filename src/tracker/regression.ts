@@ -20,7 +20,7 @@ export interface RidgeModel {
   wy: Float64Array;
   /** The lambda chosen by cross-validation. */
   lambda: number;
-  /** Mean cross-validated error, in the same units as the targets. */
+  /** Mean cross-validated error in target units, or NaN when CV could not run. */
   cvError: number;
   /** Number of samples the model was fit on. */
   sampleCount: number;
@@ -192,10 +192,21 @@ function predictStandardised(
   return [x, y];
 }
 
+/** Mid-grid fallback when no CV fold could run: the data-starved case is
+ * exactly where weak regularisation does the most damage, so err strong. */
+const FALLBACK_LAMBDA = 1;
+
 /**
- * Fits a gaze model, choosing lambda by k-fold cross-validation on mean
- * Euclidean error. Folds are interleaved rather than contiguous so that each
- * fold sees samples from every calibration point.
+ * Fits a gaze model, choosing lambda by grouped k-fold cross-validation on
+ * mean Euclidean error. Samples arrive as bursts of consecutive video frames
+ * per calibration target, so adjacent rows are near-duplicates of each other.
+ * Folds therefore hold out whole targets: interleaving samples would put a
+ * near-copy of every test row into the training set, and that leaked CV error
+ * both flatters the reported accuracy and picks a lambda too weak to survive
+ * real head movement. Holding out whole dots instead measures the spatial
+ * interpolation error that actually matters at prediction time. Interleaved
+ * assignment survives only as a fallback for data with too few distinct
+ * targets to group.
  */
 export function fitRidge(
   rows: number[][],
@@ -205,9 +216,28 @@ export function fitRidge(
 ): RidgeModel {
   if (rows.length === 0) throw new Error("Cannot fit a gaze model with no samples");
   const dim = rows[0].length;
-  const effectiveFolds = Math.min(folds, rows.length);
+  if (rows.length <= dim) {
+    throw new Error(
+      `Cannot fit a gaze model on ${rows.length} samples of ${dim} features: the system is underdetermined`
+    );
+  }
 
-  let bestLambda = LAMBDA_GRID[0];
+  // Group rows by calibration target, numbering groups in order of appearance.
+  const groupIds = new Map<string, number>();
+  const groupOf = new Array<number>(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const key = `${targetX[i]},${targetY[i]}`;
+    let id = groupIds.get(key);
+    if (id === undefined) {
+      id = groupIds.size;
+      groupIds.set(key, id);
+    }
+    groupOf[i] = id;
+  }
+  const grouped = groupIds.size >= folds;
+  const effectiveFolds = Math.min(folds, grouped ? groupIds.size : rows.length);
+
+  let bestLambda = NaN;
   let bestError = Infinity;
 
   if (effectiveFolds >= 2) {
@@ -222,7 +252,8 @@ export function fitRidge(
         const testIdx: number[] = [];
 
         for (let i = 0; i < rows.length; i++) {
-          if (i % effectiveFolds === fold) {
+          const bucket = grouped ? groupOf[i] : i;
+          if (bucket % effectiveFolds === fold) {
             testIdx.push(i);
           } else {
             trainRows.push(rows[i]);
@@ -250,6 +281,14 @@ export function fitRidge(
         }
       }
     }
+  }
+
+  if (!Number.isFinite(bestLambda)) {
+    // Every fold was skipped (training splits no larger than the feature
+    // dimension), so nothing was learned about lambda. Falling back to the
+    // weakest grid entry here would hand the least-regularised fit to the
+    // least-determined data; fall back to the middle of the grid instead.
+    bestLambda = FALLBACK_LAMBDA;
   }
 
   const st = standardise(rows, dim);
@@ -297,6 +336,36 @@ export function serialiseModel(model: RidgeModel): SerialisedModel {
     cvError: model.cvError,
     sampleCount: model.sampleCount,
   };
+}
+
+/**
+ * True when `data` has the shape and dimensions of a model serialised from a
+ * `dim`-feature basis. Persisted models cross a storage boundary the type
+ * system cannot see across, so the shape is checked rather than trusted: a
+ * dimension mismatch at predict time either reads past the feature array
+ * (NaN, and gaze silently never emits) or misaligns every column (confidently
+ * wrong gaze), and neither failure announces itself.
+ */
+export function isSerialisedModel(data: unknown, dim: number): data is SerialisedModel {
+  if (typeof data !== "object" || data === null) return false;
+  const record = data as Record<string, unknown>;
+  const finiteVector = (value: unknown, length: number): boolean =>
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every((v) => typeof v === "number" && Number.isFinite(v));
+
+  return (
+    finiteVector(record.mean, dim) &&
+    finiteVector(record.std, dim) &&
+    // Weights carry a leading intercept on top of the feature columns.
+    finiteVector(record.wx, dim + 1) &&
+    finiteVector(record.wy, dim + 1) &&
+    typeof record.lambda === "number" &&
+    Number.isFinite(record.lambda) &&
+    typeof record.sampleCount === "number"
+    // cvError is deliberately unchecked: it is allowed to be NaN, which JSON
+    // round-trips as null.
+  );
 }
 
 export function deserialiseModel(data: SerialisedModel): RidgeModel {

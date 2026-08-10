@@ -71,6 +71,43 @@ function alphaFor(cutoff: number, dt: number): number {
   return 1 / (1 + tau / dt);
 }
 
+/**
+ * 3-sample sliding median despiker.
+ *
+ * The One Euro filter deliberately follows fast jumps, which leaves it
+ * defenceless against the classic webcam-gaze artifact: during a partial blink
+ * the descending eyelid drags the iris centroid down for a frame or two before
+ * openness crosses the rejection threshold, producing a spurious downward
+ * saccade. A median over three consecutive samples deletes any single-frame
+ * excursion outright, at the cost of one frame of latency — well under the One
+ * Euro filter's own lag at 30 fps. Genuine saccades survive because they
+ * persist past one frame.
+ */
+export class MedianPoint {
+  private readonly xs: number[] = [];
+  private readonly ys: number[] = [];
+
+  filter(x: number, y: number): [number, number] {
+    this.xs.push(x);
+    this.ys.push(y);
+    if (this.xs.length > 3) {
+      this.xs.shift();
+      this.ys.shift();
+    }
+    if (this.xs.length < 3) return [x, y];
+    return [median3(this.xs[0], this.xs[1], this.xs[2]), median3(this.ys[0], this.ys[1], this.ys[2])];
+  }
+
+  reset(): void {
+    this.xs.length = 0;
+    this.ys.length = 0;
+  }
+}
+
+function median3(a: number, b: number, c: number): number {
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+}
+
 export class OneEuroPoint {
   private readonly fx: OneEuroScalar;
   private readonly fy: OneEuroScalar;
