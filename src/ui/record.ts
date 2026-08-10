@@ -136,7 +136,7 @@ export async function runRecording(
   });
 
   const durationMs = study.duration > 0 ? study.duration * 1000 : 0;
-  const stopped = await waitForStop(progressBar, durationMs, chrome, engine);
+  const stopped = await waitForStop(progressBar, durationMs, chrome, engine, participant);
   offGaze();
   window.removeEventListener("resize", remeasure);
   window.removeEventListener("scroll", remeasure, true);
@@ -182,7 +182,11 @@ function showTaskPrompt(chrome: HTMLElement, study: Study): Promise<boolean> {
           ? `Recording stops automatically after ${study.duration} seconds.`
           : "Finish with the space bar or the on-screen button when you are done."
       ),
-      el("button", { class: "btn btn-primary", type: "button" }, "Start, or press space")
+      el(
+        "button",
+        { class: "btn btn-primary", type: "button", onclick: () => start() },
+        "Start, or press space"
+      )
     );
 
     const start = () => {
@@ -206,7 +210,6 @@ function showTaskPrompt(chrome: HTMLElement, study: Study): Promise<boolean> {
       panel.remove();
     };
 
-    panel.querySelector("button")?.addEventListener("click", start);
     window.addEventListener("keydown", onKey);
     chrome.append(panel);
   });
@@ -224,21 +227,42 @@ function waitForStop(
   progressBar: HTMLElement,
   durationMs: number,
   chrome: HTMLElement,
-  engine: GazeEngine
+  engine: GazeEngine,
+  participant: string
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const start = performance.now();
     let rafId = 0;
     let disarmTimer = 0;
+    let clockTimer = 0;
     let armed = false;
 
     const baseHint =
       durationMs > 0 ? "Recording… space or Finish ends early" : "Recording… space or Finish when done";
     const hint = el("div", { class: "record-hint" }, baseHint);
+    // Who is being recorded, and how long is left. A moderator running
+    // back-to-back sessions otherwise has no way to confirm they are capturing
+    // P04 and not P03, and a 6px sliver of peach in the corner of the screen is
+    // not a clock.
+    const clock = el("span", { class: "record-clock" }, durationMs > 0 ? formatClock(durationMs) : "0:00");
+    const who = el(
+      "div",
+      { class: "record-who" },
+      el("span", { class: "record-participant" }, participant),
+      clock
+    );
     const finishBtn = el("button", { class: "btn btn-small", type: "button" }, "Finish");
     const discardBtn = el("button", { class: "btn btn-ghost btn-small", type: "button" }, "Discard");
-    const controls = el("div", { class: "record-controls" }, hint, finishBtn, discardBtn);
+    const controls = el("div", { class: "record-controls" }, who, hint, finishBtn, discardBtn);
     chrome.append(controls);
+
+    const paintClock = () => {
+      const elapsed = performance.now() - start;
+      clock.textContent = formatClock(durationMs > 0 ? Math.max(0, durationMs - elapsed) : elapsed);
+    };
+    // A timed recording already has a frame loop; a manual one does not, and
+    // does not need one — four ticks a second is plenty for a wall clock.
+    if (durationMs === 0) clockTimer = window.setInterval(paintClock, 250);
 
     // The one in-recording quality signal: gaze quietly stops arriving when
     // the face is lost, and the operator should not discover that afterwards.
@@ -254,6 +278,7 @@ function waitForStop(
     const tick = () => {
       const elapsed = performance.now() - start;
       progressBar.style.width = `${Math.min(100, (elapsed / durationMs) * 100)}%`;
+      paintClock();
       if (elapsed >= durationMs) {
         finish(true);
         return;
@@ -290,6 +315,7 @@ function waitForStop(
     const finish = (completed: boolean) => {
       cancelAnimationFrame(rafId);
       window.clearTimeout(disarmTimer);
+      window.clearInterval(clockTimer);
       offStatus();
       window.removeEventListener("keydown", onKey);
       controls.remove();
@@ -303,4 +329,12 @@ function waitForStop(
     // loop only runs when there is a deadline to draw toward.
     if (durationMs > 0) rafId = requestAnimationFrame(tick);
   });
+}
+
+/** m:ss, or plain seconds under a minute — the shortest reading that is still
+ * unambiguous at a glance from across a desk. */
+function formatClock(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }

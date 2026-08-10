@@ -3,20 +3,35 @@
 
 type Child = Node | string | null | undefined | false;
 
+/** An attribute value. `null`, `undefined` and `false` drop the attribute
+ * entirely, so a conditional one can be written inline; `true` sets it bare. */
+type AttrValue = string | number | boolean | null | undefined;
+
+/** Attributes, plus event handlers under `on`-prefixed keys. */
+export type Attrs = Record<string, AttrValue | EventListener>;
+
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
-  attrs: Record<string, string | number | boolean | EventListener> = {},
+  attrs: Attrs = {},
   ...children: Child[]
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
 
   for (const [key, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined || value === false) continue;
+
     if (typeof value === "function") {
-      node.addEventListener(key.replace(/^on/, "").toLowerCase(), value as EventListener);
+      // Whether something is a listener is decided by the key, never inferred
+      // from the value's runtime type. Inferring it means a plain-looking
+      // `value: fn` quietly registers a "value" listener nobody ever fires
+      // while the attribute the caller asked for is never set — a failure with
+      // nothing at all to see. Refusing it is the only way it gets noticed.
+      if (!key.startsWith("on")) {
+        throw new TypeError(`el(): "${key}" was given a function; event keys must start with "on"`);
+      }
+      node.addEventListener(key.slice(2).toLowerCase(), value);
     } else if (key === "class") {
       node.className = String(value);
-    } else if (value === false || value === null || value === undefined) {
-      continue;
     } else if (value === true) {
       node.setAttribute(key, "");
     } else {

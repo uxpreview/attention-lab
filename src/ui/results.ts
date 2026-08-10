@@ -1,6 +1,18 @@
 import { aggregateAois, analyseAois, type Aoi, type AoiResult } from "../analysis/aoi";
 import { detectFixations, summarise, type Fixation } from "../analysis/fixations";
-import { renderHeatmap, type HeatmapStyle, type HeatPoint } from "../analysis/heatmap";
+import { renderHeatmap, type HeatPoint } from "../analysis/heatmap";
+import { OVERLAY_LABELS, participantColour, type OverlayMode } from "../analysis/legend";
+import {
+  ERROR_BAD_DEG,
+  gradeError,
+  gradeRecording,
+  gradeTracking,
+  isLowSignal,
+  lowSignalReason,
+  pxToDegrees,
+  TRACKING_BAD,
+  type QualityGrade,
+} from "../analysis/quality";
 import { renderScanpath } from "../analysis/scanpath";
 import {
   exportAoiCsv,
@@ -11,17 +23,13 @@ import {
 } from "../data/export";
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
+import { appBar } from "./chrome";
 import { clear, confirmButton, el, formatMs, formatPercent, nextFrame } from "./dom";
+import { legendElement } from "./legend";
 
-type ViewMode = HeatmapStyle | "scanpath" | "raw";
+type ViewMode = OverlayMode;
 
-const VIEW_MODES: Array<[ViewMode, string]> = [
-  ["heat", "Heatmap"],
-  ["spotlight", "Spotlight"],
-  ["contour", "Contours"],
-  ["scanpath", "Scanpath"],
-  ["raw", "Raw gaze"],
-];
+const VIEW_MODES: ViewMode[] = ["heat", "spotlight", "contour", "scanpath", "raw"];
 
 interface AnalysedRecording {
   recording: Recording;
@@ -51,69 +59,105 @@ export async function renderResults(
   let selected: string | "all" = "all";
   let drawingAoi = false;
 
+  // A recording below the quality threshold is not evidence, and the app's own
+  // bench notes say why: a bad calibration "looks exactly like data". Folding a
+  // 44%-tracked session into the same heatmap as a 91% one produces a blended
+  // number that describes neither. They are excluded from the aggregate by
+  // default, said out loud in the Summary, and one click away from being
+  // included — unless every recording is flagged, in which case excluding them
+  // all would leave an empty stage with no explanation.
+  let includeLowSignal = false;
+  const flaggedRecordings = (): Recording[] => recordings.filter((r) => isLowSignal(r.quality));
+  /** True only when there is something to exclude *and* something left after
+   * excluding it. Recomputed rather than captured, because deleting the one
+   * clean recording would otherwise leave the screen hiding everything it has
+   * and reporting on nothing. */
+  const excludingLowSignal = (): boolean => {
+    const flagged = flaggedRecordings().length;
+    return !includeLowSignal && flagged > 0 && flagged < recordings.length;
+  };
+
   const stage = el("div", { class: "results-stage" });
   const overlay = el("canvas", { class: "results-overlay", role: "img" });
   const aoiLayer = el("div", { class: "aoi-layer" });
   let stimulusImage: HTMLImageElement | null = null;
   let objectUrl: string | null = null;
 
+  // The stage is the primary surface, so it explains its own emptiness rather
+  // than leaving that to the sidebar. There is exactly one such message: a URL
+  // study used to print this line and the placeholder's on the same baselines,
+  // one translucent layer over the other, and the two texts interleaved
+  // character for character.
+  const emptyLine = "No recordings yet — run a session to see attention here.";
+
   if (study.stimulus.kind === "image") {
     objectUrl = URL.createObjectURL(study.stimulus.blob);
     stimulusImage = el("img", { class: "results-image", src: objectUrl, alt: "" });
     stage.append(stimulusImage);
+    if (recordings.length === 0) {
+      stage.append(el("div", { class: "stage-empty" }, el("p", {}, emptyLine)));
+    }
   } else {
     stage.append(
       el(
         "div",
         { class: "results-placeholder" },
-        el("p", {}, "Live page stimulus"),
+        el("p", { class: "label" }, "Live page stimulus"),
         el("code", {}, study.stimulus.url),
         el(
           "p",
           { class: "muted" },
-          "Overlays are drawn against the recorded viewport, not a re-render of the page."
+          recordings.length === 0
+            ? `${emptyLine} Overlays are drawn against the recorded viewport, not a re-render of the page.`
+            : "Overlays are drawn against the recorded viewport, not a re-render of the page."
         )
       )
     );
   }
   stage.append(overlay, aoiLayer);
 
+  const legend = el("figure", { class: "legend-slot" });
   const sidebar = el("aside", { class: "results-sidebar" });
   const layout = el(
     "div",
     { class: "results-layout" },
-    el("div", { class: "results-main" }, stage),
+    el("div", { class: "results-main" }, stage, legend),
     sidebar
   );
 
+  // Export is the whole point of a research tool, so it is a persistent
+  // toolbar action beside the recordings count rather than the last block of a
+  // sidebar — where it sat below the fold of an invisible nested scroller.
+  const exportBar = el("div", { class: "results-actions" });
   const header = el(
     "header",
     { class: "results-header" },
-    el("button", { class: "btn btn-ghost", type: "button", onclick: onBack }, "← Studies"),
-    el("h1", {}, study.name),
-    el("span", { class: "pill" }, `${recordings.length} recording${recordings.length === 1 ? "" : "s"}`)
+    el(
+      "div",
+      { class: "results-title" },
+      el("button", { class: "btn btn-ghost btn-small", type: "button", onclick: onBack }, "← Studies"),
+      el("h1", {}, study.name),
+      el(
+        "span",
+        { class: "pill" },
+        `${recordings.length} recording${recordings.length === 1 ? "" : "s"}`
+      )
+    ),
+    exportBar
   );
 
   // The results screen sits on the same measure as the experiment page around
-  // it; .container is the site's shell.
-  host.append(el("div", { class: "container screen" }, header, layout));
+  // it; .container is the site's shell. The bar above it keeps the wordmark and
+  // the route back to the site on the deepest screen in the app.
+  host.append(appBar(), el("div", { class: "container screen screen-fill" }, header, layout));
 
   if (recordings.length === 0) {
     sidebar.append(
       el(
         "div",
         { class: "empty" },
-        el("p", {}, "No recordings yet."),
+        el("h3", {}, "No recordings yet"),
         el("p", { class: "muted" }, "Run a session from the study list to collect data.")
-      )
-    );
-    // The stage is the primary surface, so it explains its own emptiness
-    // rather than leaving that to the sidebar.
-    stage.append(
-      el(
-        "div",
-        { class: "stage-empty" },
-        el("p", {}, "No recordings yet — run a session to see attention here.")
       )
     );
     return;
@@ -155,8 +199,11 @@ export async function renderResults(
 
   let analysed = analyse();
 
-  const activeSet = (): AnalysedRecording[] =>
-    selected === "all" ? analysed : analysed.filter((a) => a.recording.id === selected);
+  const activeSet = (): AnalysedRecording[] => {
+    if (selected !== "all") return analysed.filter((a) => a.recording.id === selected);
+    if (!excludingLowSignal()) return analysed;
+    return analysed.filter((a) => !isLowSignal(a.recording.quality));
+  };
 
   const draw = async (): Promise<void> => {
     await nextFrame();
@@ -176,8 +223,7 @@ export async function renderResults(
     aoiLayer.style.width = overlay.style.width;
     aoiLayer.style.height = overlay.style.height;
 
-    const modeLabel = VIEW_MODES.find(([value]) => value === mode)?.[1] ?? mode;
-    overlay.setAttribute("aria-label", `${modeLabel} overlay`);
+    overlay.setAttribute("aria-label", `${OVERLAY_LABELS[mode]} overlay`);
 
     const set = activeSet();
 
@@ -194,6 +240,17 @@ export async function renderResults(
       }
       renderHeatmap(overlay, points, { style: mode, radiusRatio: 0.055 });
     }
+
+    // Spotlight dims the stage to near-black, which a deep-teal region box and
+    // its dark label chip simply disappear into. The class flips both to the
+    // cream side of the palette for as long as the mask is up.
+    stage.classList.toggle("stage--spotlight", mode === "spotlight");
+
+    // Only the scanpath's own participant is keyed, because that is the only
+    // one on the stage.
+    const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
+    clear(legend);
+    legend.append(legendElement(mode, keyed.map((a) => a.recording.participant)));
 
     renderAoiBoxes(aoiLayer, aois, onAoiChange);
   };
@@ -285,7 +342,7 @@ export async function renderResults(
       el(
         "div",
         { class: "segmented", role: "group", "aria-label": "View mode" },
-        ...VIEW_MODES.map(([value, label]) =>
+        ...VIEW_MODES.map((value) =>
           el(
             "button",
             {
@@ -299,7 +356,7 @@ export async function renderResults(
                 renderSidebar();
               },
             },
-            label
+            OVERLAY_LABELS[value]
           )
         )
       )
@@ -317,12 +374,14 @@ export async function renderResults(
           renderSidebar();
         },
       },
-      el("option", { value: "all" }, `All participants (${recordings.length})`),
+      el("option", { value: "all" }, `All participants (${activeSet().length})`),
       ...analysed.map((a) =>
         el(
           "option",
           { value: a.recording.id, ...(selected === a.recording.id ? { selected: true } : {}) },
-          a.recording.participant
+          isLowSignal(a.recording.quality)
+            ? `${a.recording.participant} — low signal`
+            : a.recording.participant
         )
       )
     );
@@ -332,6 +391,34 @@ export async function renderResults(
       el("h3", {}, el("label", { for: "participant-filter" }, "Participants")),
       participantSelect
     );
+
+    const flagged = flaggedRecordings();
+    const excluding = excludingLowSignal();
+
+    if (flagged.length > 0 && flagged.length < recordings.length) {
+      const toggle = el("input", {
+        type: "checkbox",
+        "data-key": "include-low",
+        ...(includeLowSignal ? { checked: true } : {}),
+        onchange: (event: Event) => {
+          includeLowSignal = (event.target as HTMLInputElement).checked;
+          void draw();
+          renderSidebar();
+        },
+      });
+      sidebar.append(
+        el(
+          "label",
+          { class: "checkbox checkbox-quiet" },
+          toggle,
+          el(
+            "span",
+            {},
+            `Include ${flagged.length} low-signal recording${flagged.length === 1 ? "" : "s"} in the aggregate`
+          )
+        )
+      );
+    }
 
     if (mode === "scanpath" && selected === "all" && analysed.length > 1) {
       sidebar.append(
@@ -351,20 +438,39 @@ export async function renderResults(
       set.map((a) => a.recording.quality.validationError).filter((v): v is number => v !== null)
     );
 
+    const meanTracking = averageOf(set.map((a) => a.recording.quality.trackingRatio)) ?? 0;
+
     sidebar.append(
       el("h3", {}, "Summary"),
       statRow("Fixations", String(stats.fixationCount)),
       statRow("Mean fixation", formatMs(stats.meanFixationDuration)),
       statRow("Time to first fixation", formatMs(stats.timeToFirstFixation)),
-      statRow(
-        "Tracking ratio",
-        formatPercent(averageOf(set.map((a) => a.recording.quality.trackingRatio)) ?? 0)
-      ),
+      // The two quality numbers wear their grade. Reporting a blended 69%
+      // tracked in the same grey as a clean 91% is what let a broken session
+      // pass for a finding.
+      statRow("Tracking ratio", formatPercent(meanTracking), gradeTracking(meanTracking)),
       statRow(
         "Calibration error",
-        meanValidation === null ? "—" : `${Math.round(meanValidation)}px`
+        meanValidation === null
+          ? "—"
+          : `${Math.round(meanValidation)}px · ~${pxToDegrees(meanValidation).toFixed(1)}°`,
+        meanValidation === null ? undefined : gradeError(meanValidation)
       )
     );
+
+    if (flagged.length > 0 && selected === "all") {
+      const isAre = flagged.length === 1 ? "is" : "are";
+      const threshold = `under ${Math.round(TRACKING_BAD * 100)}% tracked, or over ${ERROR_BAD_DEG}° of calibration error`;
+      sidebar.append(
+        el(
+          "p",
+          { class: `note ${excluding ? "" : "note-warn"}` },
+          excluding
+            ? `${flagged.length} of ${recordings.length} recordings ${isAre} below the quality threshold (${threshold}) and ${isAre} excluded from these numbers and the overlay.`
+            : `${flagged.length} of ${recordings.length} recordings ${isAre} below the quality threshold (${threshold}) and ${isAre} included in these numbers. Read them as indicative, not as findings.`
+        )
+      );
+    }
 
     // AOIs
     const aoiHeader = el(
@@ -419,7 +525,16 @@ export async function renderResults(
           ...aggregates.map((agg) =>
             el(
               "tr",
-              {},
+              {
+                // With five or six overlapping regions there is otherwise no
+                // way to tell which row is which box on the stimulus. Focus
+                // counts as well as hover, or the link is mouse-only.
+                "data-aoi-row": agg.aoiId,
+                onmouseenter: () => highlightAoi(agg.aoiId, true),
+                onmouseleave: () => highlightAoi(agg.aoiId, false),
+                onfocusin: () => highlightAoi(agg.aoiId, true),
+                onfocusout: () => highlightAoi(agg.aoiId, false),
+              },
               el(
                 "td",
                 {},
@@ -455,106 +570,46 @@ export async function renderResults(
       sidebar.append(table);
     }
 
-    // Exports
-    sidebar.append(
-      el("h3", {}, "Export"),
-      el(
-        "div",
-        { class: "button-grid" },
-        el(
-          "button",
-          {
-            class: "btn btn-small",
-            type: "button",
-            "data-key": "export-png",
-            onclick: () => void exportOverlayPng(study, stimulusImage, overlay, mode),
-          },
-          "PNG overlay"
-        ),
-        el(
-          "button",
-          {
-            class: "btn btn-small",
-            type: "button",
-            "data-key": "export-fixations",
-            onclick: () =>
-              exportFixationsCsv(
-                study,
-                analysed.map((a) => ({
-                  participant: a.recording.participant,
-                  fixations: a.fixations,
-                }))
-              ),
-          },
-          "Fixations CSV"
-        ),
-        el(
-          "button",
-          {
-            class: "btn btn-small",
-            type: "button",
-            "data-key": "export-raw",
-            onclick: () => exportRawCsv(study, recordings),
-          },
-          "Raw CSV"
-        ),
-        el(
-          "button",
-          {
-            class: "btn btn-small",
-            type: "button",
-            "data-key": "export-aoi",
-            onclick: () =>
-              exportAoiCsv(
-                study,
-                aggregateAois(
-                  aois,
-                  analysed.map((a) => a.aoiResults)
-                ),
-                analysed.map((a) => ({
-                  participant: a.recording.participant,
-                  results: a.aoiResults,
-                }))
-              ),
-          },
-          "AOI CSV"
-        ),
-        el(
-          "button",
-          {
-            class: "btn btn-small",
-            type: "button",
-            "data-key": "export-json",
-            onclick: () => exportStudyJson(study, recordings),
-          },
-          "Session JSON"
-        )
-      )
-    );
-
     // Per-recording management
     sidebar.append(
       el("h3", {}, "Recordings"),
       el(
         "ul",
         { class: "recording-list" },
-        ...analysed.map((a) =>
-          el(
+        ...analysed.map((a) => {
+          const grade = gradeRecording(a.recording.quality);
+          const low = grade === "bad";
+          const excluded = low && excluding && selected === "all";
+          return el(
             "li",
-            {},
+            { class: low ? "is-low-signal" : "" },
             el(
               "div",
-              {},
-              el("strong", {}, a.recording.participant),
+              { class: "recording-meta" },
+              el(
+                "div",
+                {},
+                el("strong", {}, a.recording.participant),
+                low
+                  ? el(
+                      "span",
+                      {
+                        class: "quality-badge",
+                        title: `Low signal: ${lowSignalReason(a.recording.quality)}.${excluded ? " Excluded from the aggregate." : ""}`,
+                      },
+                      excluded ? "Low signal · excluded" : "Low signal"
+                    )
+                  : null
+              ),
               el(
                 "span",
-                { class: "muted" },
-                ` ${a.fixations.length} fixations · ${formatPercent(a.recording.quality.trackingRatio)} tracked`
+                { class: `recording-stats signal-${grade}` },
+                `${a.fixations.length} fixations · ${formatPercent(a.recording.quality.trackingRatio)} tracked`
               )
             ),
             recordingDeleteButton(a.recording)
-          )
-        )
+          );
+        })
       )
     );
 
@@ -581,6 +636,51 @@ export async function renderResults(
     return btn;
   }
 
+  /** Lights the box on the stimulus that a table row describes. */
+  function highlightAoi(aoiId: string, on: boolean): void {
+    aoiLayer
+      .querySelector<HTMLElement>(`.aoi-box[data-aoi="${aoiId}"]`)
+      ?.classList.toggle("is-linked", on);
+  }
+
+  // The toolbar is built once: every handler reads `mode`, `selected`,
+  // `analysed` and `aois` when it fires, so it never goes stale.
+  exportBar.append(
+    el("span", { class: "label results-actions-label" }, "Export"),
+    exportButton("PNG overlay", "export-png", () => {
+      const set = activeSet();
+      const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
+      void exportOverlayPng(study, stimulusImage, overlay, {
+        mode,
+        participants: keyed.map((a) => a.recording.participant),
+        scope:
+          selected === "all"
+            ? excludingLowSignal()
+              ? "All participants, low-signal excluded"
+              : "All participants"
+            : (keyed[0]?.recording.participant ?? "All participants"),
+      });
+    }),
+    exportButton("Fixations CSV", "export-fixations", () =>
+      exportFixationsCsv(
+        study,
+        analysed.map((a) => ({ participant: a.recording.participant, fixations: a.fixations }))
+      )
+    ),
+    exportButton("Raw CSV", "export-raw", () => exportRawCsv(study, recordings)),
+    exportButton("AOI CSV", "export-aoi", () =>
+      exportAoiCsv(
+        study,
+        aggregateAois(
+          aois,
+          analysed.map((a) => a.aoiResults)
+        ),
+        analysed.map((a) => ({ participant: a.recording.participant, results: a.aoiResults }))
+      )
+    ),
+    exportButton("Session JSON", "export-json", () => exportStudyJson(study, recordings))
+  );
+
   renderSidebar();
   await draw();
 
@@ -606,8 +706,17 @@ export async function renderResults(
   observer.observe(host, { childList: true });
 }
 
-function statRow(label: string, value: string): HTMLElement {
-  return el("div", { class: "stat-row" }, el("span", {}, label), el("strong", {}, value));
+function exportButton(label: string, key: string, onclick: () => void): HTMLButtonElement {
+  return el("button", { class: "btn btn-small", type: "button", "data-key": key, onclick }, label);
+}
+
+function statRow(label: string, value: string, grade?: QualityGrade): HTMLElement {
+  return el(
+    "div",
+    { class: "stat-row" },
+    el("span", {}, label),
+    el("strong", { class: grade ? `signal-${grade}` : "" }, value)
+  );
 }
 
 function averageOf(values: number[]): number | null {
@@ -624,10 +733,12 @@ function renderRawPoints(canvas: HTMLCanvasElement, recordings: Recording[]): vo
   // is ~1800 dots per participant, and at this size square dots are
   // indistinguishable from round ones while keeping the per-dot alpha
   // build-up that makes dense clusters read darker.
+  //
+  // Colours come from the shared categorical palette, which is also what the
+  // legend keys — three unattributable dot clouds are worse than one.
   const size = 5;
   recordings.forEach((recording, index) => {
-    const hue = (index * 67) % 360;
-    ctx.fillStyle = `hsla(${hue}, 90%, 60%, 0.35)`;
+    ctx.fillStyle = participantColour(index, 0.35);
     for (const p of recording.points) {
       ctx.fillRect(p.x * canvas.width - size / 2, p.y * canvas.height - size / 2, size, size);
     }
@@ -642,7 +753,7 @@ function renderAoiBoxes(layer: HTMLElement, aois: Aoi[], onChange: () => void): 
   for (const aoi of aois) {
     const box = el(
       "div",
-      { class: "aoi-box" },
+      { class: "aoi-box", "data-aoi": aoi.id },
       el("span", { class: "aoi-label" }, aoi.label),
       el(
         "button",

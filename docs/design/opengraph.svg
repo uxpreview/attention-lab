@@ -1,7 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Attention Lab, EXP-038 in the Lab at ryankm.com">
   <!-- The share card: the same picture the Lab's shelf card runs, held still.
        A wireframe being read, heat where the eye rested, straight saccades
-       between. Site tokens, no external assets, so it renders anywhere. -->
+       between. Site tokens, no external assets, so it renders anywhere.
+
+       This is the editable source. What ships is public/opengraph.png, exported
+       from here at 1200x630; this file lives outside public/ so the deploy only
+       carries files the page actually references. Re-export after editing. -->
   <rect width="1200" height="630" fill="#fef6e9"/>
 
   <defs>

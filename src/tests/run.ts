@@ -10,8 +10,12 @@
  */
 
 import { detectFixations, summarise } from "../analysis/fixations";
-import { fieldPercentile } from "../analysis/heatmap";
+import { contourBandColours, fieldPercentile, paintField, rampColour } from "../analysis/heatmap";
+import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
+import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
+import { layoutOrdinals, type OrdinalLabel } from "../analysis/scanpath";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
+import type { RecordingQuality } from "../data/types";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { MedianPoint, OneEuroPoint } from "../tracker/filter";
 import {
@@ -525,6 +529,43 @@ section("Heatmap percentile ceiling");
   check("an empty field yields a zero ceiling", fieldPercentile(new Float32Array(16), 0.98) === 0);
 }
 
+// --- Overlay painting ----------------------------------------------------
+
+section("Heatmap overlay painting");
+{
+  // A splat's rim: hot centre, then a tail that fades to nothing. The tail is
+  // where a spotlight can grow holes, so the field deliberately includes values
+  // that round to zero intensity.
+  const field = Float32Array.from([100, 40, 6, 0.2, 0.02, 0]);
+  const scale = 255 / 100;
+  const alphaOf = (dst: Uint8ClampedArray, i: number): number => dst[i * 4 + 3];
+
+  const spotlight = new Uint8ClampedArray(field.length * 4);
+  paintField(field, spotlight, "spotlight", scale, 0.72);
+
+  let dimmed = true;
+  let monotonic = true;
+  for (let i = 1; i < field.length; i++) {
+    // Index 0 is hot enough to be fully revealed, which is the point of it.
+    if (alphaOf(spotlight, i) === 0) dimmed = false;
+    if (alphaOf(spotlight, i) < alphaOf(spotlight, i - 1)) monotonic = false;
+  }
+
+  // The regression: pixels holding a splat too faint to round up to one unit of
+  // intensity were skipped entirely, leaving them transparent — an undimmed
+  // halo punched through the mask around every hot spot.
+  check("spotlight dims a splat's faint rim rather than punching a hole", dimmed);
+  check("spotlight dim rises as attention falls", monotonic);
+  check("spotlight fully reveals its hottest point", alphaOf(spotlight, 0) === 0);
+  check("spotlight dims unlooked regions without going opaque", alphaOf(spotlight, 5) < 255);
+
+  const heat = new Uint8ClampedArray(field.length * 4);
+  paintField(field, heat, "heat", scale, 0.72);
+  check("heat leaves unlooked regions transparent", alphaOf(heat, 5) === 0);
+  check("heat is strongest at the hottest point", alphaOf(heat, 0) > alphaOf(heat, 2));
+  check("heat reaches the hot end of the ramp", heat[0] === 255 && heat[2] === 0);
+}
+
 // --- AOIs ----------------------------------------------------------------
 
 section("Area of interest analysis");
@@ -565,6 +606,149 @@ section("Area of interest analysis");
   check("hit rate is 1 when everyone looked", heroAgg.hitRate === 1);
   check("mean TTFF only averages participants who found it", ctaAgg.meanTimeToFirstFixation === 900);
   check("aggregate reports participant count", ctaAgg.participants === 2);
+}
+
+// --- Recording quality ---------------------------------------------------
+
+section("Recording quality grading");
+{
+  const quality = (trackingRatio: number, validationError: number | null): RecordingQuality => ({
+    validationError,
+    trackingRatio,
+    meanFps: 30,
+    viewportWidth: SCREEN_W,
+    viewportHeight: SCREEN_H,
+    stimulusRect: { x: 0, y: 0, width: SCREEN_W, height: SCREEN_H },
+  });
+
+  check("a well-tracked session grades good", gradeTracking(0.91) === "good");
+  check("a middling session grades warn", gradeTracking(0.7) === "warn");
+  check("the screenshot's 44%-tracked session grades bad", gradeTracking(0.44) === "bad");
+
+  // 4° at 60cm is ~159 CSS px, so 210px is over the line and 130px is not.
+  check("a 210px calibration error grades bad", gradeError(210) === "bad");
+  check("a 130px calibration error is not bad", gradeError(130) !== "bad");
+  check("an unmeasured calibration is warned about, not condemned", gradeError(null) === "warn");
+
+  check("the worse axis decides the row", gradeRecording(quality(0.95, 210)) === "bad");
+  check("a clean recording is not flagged", isLowSignal(quality(0.91, 90)) === false);
+  check("the flagged recording is excluded-worthy", isLowSignal(quality(0.44, 210)) === true);
+  // The regression this exists to prevent: a 44%-tracked, 210px-error session
+  // being averaged into the aggregate in the same grey as a clean one.
+  check("low tracking alone is enough to flag", isLowSignal(quality(0.44, 60)) === true);
+}
+
+// --- Scanpath ordinals ---------------------------------------------------
+
+section("Scanpath ordinal placement");
+{
+  const collides = (a: OrdinalLabel, b: OrdinalLabel): boolean =>
+    Math.abs(a.x - b.x) < a.halfWidth + b.halfWidth &&
+    Math.abs(a.y - b.y) < a.halfHeight + b.halfHeight;
+
+  const countCollisions = (labels: OrdinalLabel[]): number => {
+    let hits = 0;
+    for (let i = 0; i < labels.length; i++) {
+      for (let j = i + 1; j < labels.length; j++) {
+        if (collides(labels[i], labels[j])) hits++;
+      }
+    }
+    return hits;
+  };
+
+  // A sparse path: every number belongs at the centre of its own circle.
+  const sparse = layoutOrdinals([
+    { x: 100, y: 100, radius: 20 },
+    { x: 300, y: 140, radius: 24 },
+    { x: 200, y: 400, radius: 18 },
+  ]);
+  check("a sparse path keeps its labels centred", sparse.every((l) => !l.leader));
+  check("a sparse path has no collisions", countCollisions(sparse) === 0);
+
+  // The failure from the screenshots: a tight cluster, where a heatmap-dense
+  // reader makes several fixations within a few pixels of each other and the
+  // ordinals printed on top of one another.
+  const clusterCircles = Array.from({ length: 6 }, (_, i) => ({
+    x: 200 + i * 3,
+    y: 200 + i * 2,
+    radius: 22,
+  }));
+  const cluster = layoutOrdinals(clusterCircles);
+  check("a dense cluster still emits every ordinal", cluster.length === 6);
+  check(
+    "a dense cluster's ordinals do not overlap",
+    countCollisions(cluster) === 0,
+    `${countCollisions(cluster)} collisions`
+  );
+  check("the first ordinal keeps its circle's centre", cluster[0].leader === false);
+  check(
+    "a dense cluster displaces most of its ordinals",
+    cluster.filter((l) => l.leader).length >= 4,
+    `${cluster.filter((l) => l.leader).length} of 6 displaced`
+  );
+  // A displaced label has to end up outside the circle it belongs to, or the
+  // leader line would start and end in the same place.
+  check(
+    "every displaced ordinal clears its own circle",
+    cluster.every(
+      (l, i) =>
+        !l.leader ||
+        Math.hypot(l.x - clusterCircles[i].x, l.y - clusterCircles[i].y) >= clusterCircles[i].radius
+    )
+  );
+
+  // Exact co-location is the worst case: eight callout slots for eight labels.
+  const stacked = layoutOrdinals(Array.from({ length: 8 }, () => ({ x: 150, y: 150, radius: 16 })));
+  check("perfectly co-located fixations all keep a number", stacked.length === 8);
+  check(
+    "perfectly co-located fixations are mostly separated",
+    countCollisions(stacked) < 4,
+    `${countCollisions(stacked)} collisions across 8 labels`
+  );
+}
+
+// --- Legends -------------------------------------------------------------
+
+section("Overlay legends");
+{
+  const heat = legendFor("heat", ["P01", "P02"]);
+  check("the heat legend is a gradient", heat.stops !== null && heat.stops.length > 2);
+  check("the heat legend is not banded", heat.banded === false);
+  // The legend must come from the same lookup table as the pixels, or it drifts
+  // into promising colours the renderer does not paint.
+  check("the heat legend ends match the ramp", heat.stops?.[0] === rampColour(0));
+  check(
+    "the heat legend's hot end matches the ramp",
+    heat.stops?.[heat.stops.length - 1] === rampColour(1)
+  );
+  check("the heat legend names its units", /fixation duration/i.test(heat.note));
+  check("the heat legend says the scale is relative", /relative to this selection/i.test(heat.note));
+
+  const contour = legendFor("contour", []);
+  check("the contour legend is banded", contour.banded === true);
+  check(
+    "the contour legend has one swatch per drawn band",
+    contour.stops?.length === contourBandColours().length
+  );
+
+  const scanpath = legendFor("scanpath", ["P01"]);
+  check("the scanpath legend keys time", scanpath.minLabel === "First" && scanpath.maxLabel === "Last");
+
+  const raw = legendFor("raw", ["P01", "P02", "P03"]);
+  check("the raw legend keys every participant", raw.swatches?.length === 3);
+  check(
+    "the raw legend's swatches match the dots the canvas draws",
+    raw.swatches?.[1].colour === participantColour(1)
+  );
+  check("the raw legend labels the participants", raw.swatches?.[2].label === "P03");
+  check("raw has no gradient", raw.stops === null);
+
+  // The old hsla(i * 67) sweep put P01 on red and P02 on green — the one pair
+  // a red-green colour-blind viewer cannot separate.
+  const distinct = new Set(PARTICIPANT_COLOURS);
+  check("participant colours are all distinct", distinct.size === PARTICIPANT_COLOURS.length);
+  check("the palette wraps rather than running out", participantColour(0) === participantColour(PARTICIPANT_COLOURS.length));
+  check("participant colours carry alpha when asked", participantColour(0, 0.35).endsWith(", 0.35)"));
 }
 
 // --- Result --------------------------------------------------------------

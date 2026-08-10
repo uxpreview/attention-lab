@@ -84,6 +84,17 @@ label,
 .screen-narrow {
   max-width: calc(620px + 80px);
 }
+/* The results screen used to leave ~180px of dead cream under the stage at
+   1440×900. It now grows to the viewport, so the stage takes the slack.
+   88px is the site bar plus the screen's own top padding. */
+.screen-fill {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 88px);
+}
+.screen-fill .results-layout {
+  flex: 1 1 auto;
+}
 
 /* --- Type ------------------------------------------------------------- */
 
@@ -450,13 +461,21 @@ p {
 .btn:hover {
   border-color: var(--strong);
 }
+/* The one committing action per screen is filled at rest.
+ *
+ * The site's outline-that-fills-on-hover contract still governs links and
+ * secondary actions, and it is right for them — but with every button in the
+ * product wearing it, "Run session" and "Results" carried identical weight,
+ * and a moderator running a participant under time pressure had no visual
+ * anchor. One filled pill per screen, everything else outlined. */
 .btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn-primary:hover {
   background: var(--accent);
   border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--accent-contrast);
 }
 .btn-ghost {
@@ -547,6 +566,38 @@ p {
   }
 }
 
+/* The setup panel has two measures in it and they disagree: the copy wants a
+   reading measure, the controls want the panel. Stacked, the display heading
+   wrapped at ~380px with most of the panel empty beside it and the form ran
+   full-bleed underneath. Two columns let each keep its own width. */
+.setup-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .setup-panel {
+    grid-template-columns: minmax(300px, 36%) minmax(0, 1fr);
+    gap: 56px;
+  }
+}
+/* In its own column the copy is already at its measure; the ch caps that used
+   to hold it back from a 1140px panel would now clamp it twice. */
+.setup-copy .t-display {
+  max-width: none;
+}
+.setup-copy .panel-lede {
+  max-width: none;
+  margin-bottom: 0;
+}
+.setup-controls .field-grid {
+  margin-top: 0;
+}
+.setup-controls > .drop-zone + .field-grid {
+  margin-top: 20px;
+}
+
 .drop-zone {
   position: relative;
   display: flex;
@@ -571,6 +622,30 @@ p {
 }
 .drop-zone.has-file {
   border-style: solid;
+  border-color: var(--accent);
+}
+.drop-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent-ink);
+  font-size: 17px;
+  line-height: 1;
+  transition:
+    border-color 0.25s ease,
+    transform 0.25s var(--ease-expo);
+}
+.drop-zone:hover .drop-icon,
+.drop-zone.is-over .drop-icon {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.drop-zone.has-file .drop-icon {
   border-color: var(--accent);
 }
 .drop-title {
@@ -666,6 +741,16 @@ p {
   text-transform: uppercase;
   margin-top: 6px;
 }
+/* How much data is in here, first thing on the line — it is what a researcher
+   scans a list of studies for. */
+.study-count {
+  color: var(--strong);
+  font-weight: 500;
+}
+.study-count.is-empty {
+  color: var(--muted);
+  font-weight: 400;
+}
 .study-actions {
   display: flex;
   gap: 8px;
@@ -742,6 +827,11 @@ p {
   height: 100%;
   object-fit: cover;
 }
+/* A camera that never started has no picture to show. The video element stays
+   in the DOM so a retry can fill it. */
+.camera-preview.is-dead {
+  display: none;
+}
 .session-actions {
   display: flex;
   flex-wrap: wrap;
@@ -804,6 +894,10 @@ p {
   --accent: #ffb8a4;
   --accent-ink: #ffb8a4;
   --accent-contrast: #003f48;
+  /* Carried over from .band in tokens.css: without it a filled primary button
+     in a dark room would take its hover from the cream palette and go
+     dark-teal-on-teal. */
+  --accent-hover: #ffd0c2;
   --accent-warm: #ffb8a4;
   --accent-warm-ink: #ffb8a4;
   --tint: #0c4a53;
@@ -894,6 +988,45 @@ p {
     box-shadow: 0 0 0 14px color-mix(in srgb, var(--accent) 6%, transparent);
   }
 }
+/* The dwell ring: a determinate sweep over settle + dwell, so "hold your gaze"
+   has a visible end. It is only up while sampling, and its stroke offset is
+   driven from JS (see ui/calibration.ts) rather than a CSS animation, because
+   reduced motion neutralises those and this one is a progress readout. */
+.calib-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 62px;
+  height: 62px;
+  margin: -31px 0 0 -31px;
+  overflow: visible;
+  opacity: 0;
+  pointer-events: none;
+  /* Start the sweep at twelve o'clock rather than three. */
+  transform: rotate(-90deg);
+}
+.calib-dot.is-active .calib-ring {
+  opacity: 1;
+}
+.calib-ring circle {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.calib-ring-track {
+  stroke: color-mix(in srgb, #fdf4e7 28%, transparent);
+}
+.calib-ring-sweep {
+  stroke: var(--signal-good);
+}
+/* Reduced motion removes the waiting pulse entirely, which took the only cue
+   distinguishing a dot that is waiting to be clicked from one being sampled.
+   A static halo puts that difference back. */
+@media (prefers-reduced-motion: reduce) {
+  .calib-dot {
+    box-shadow: 0 0 0 11px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+}
 
 .record-stimulus {
   position: absolute;
@@ -950,6 +1083,37 @@ p {
    carry the same dark backing as the hint pill to stay legible on it. */
 .record-controls .btn {
   background: color-mix(in srgb, #003f48 82%, transparent);
+}
+/* Who is being recorded, and how long is left. The 6px progress sliver at the
+   top edge of the screen is a peripheral cue, not a readout: a moderator
+   running back-to-back sessions needs to confirm the label and see the clock
+   without leaving the participant's screen. */
+.record-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, #003f48 82%, transparent);
+  border-radius: var(--r-chip);
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+.record-participant {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--strong);
+}
+.record-clock {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  min-width: 3ch;
+  text-align: right;
 }
 .record-hint {
   font-family: var(--font-mono);
@@ -1016,11 +1180,31 @@ p {
 
 .results-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  justify-content: space-between;
+  gap: 12px 20px;
   margin-bottom: 24px;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--rule);
+}
+.results-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 340px;
+}
+/* Export is the tool's output, so it is a persistent toolbar action rather
+   than the last block of a scrolling sidebar. */
+.results-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.results-actions-label {
+  margin-right: 4px;
 }
 .results-header h1 {
   font-family: var(--font-display);
@@ -1041,8 +1225,11 @@ p {
 }
 .results-main {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 .results-stage {
+  flex: 1 1 auto;
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1066,20 +1253,29 @@ p {
 .results-placeholder {
   padding: 60px 24px;
   text-align: center;
+  max-width: 52ch;
 }
 .results-placeholder code {
+  display: block;
+  margin: 4px 0 10px;
   color: var(--accent);
   font-size: 13px;
   word-break: break-all;
 }
+/* No max-height and no inner scroller. It had one, and it hid the entire
+   recordings list below the fold of a nested scroll region with no scrollbar,
+   no fade and no affordance — while the page itself also scrolled, so two
+   scroll contexts fought over the wheel. The sidebar flows with the page. */
 .results-sidebar {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-card);
   padding: 20px;
-  max-height: 84vh;
-  overflow-y: auto;
 }
+/* Opaque, not translucent: as a 55% wash it blended with whatever it covered,
+   and over a URL study's placeholder the two texts printed on top of each
+   other. Nothing is stacked underneath it any more, and it stays opaque so
+   nothing can be again. */
 .stage-empty {
   position: absolute;
   inset: 0;
@@ -1088,7 +1284,7 @@ p {
   justify-content: center;
   text-align: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  background: var(--surface);
 }
 .stage-empty p {
   margin: 0;
@@ -1096,13 +1292,87 @@ p {
   max-width: 34ch;
 }
 
-.segmented {
+/* --- Legend ----------------------------------------------------------- */
+/* Built from the same lookup tables the overlay is painted with, so the strip
+   under the stage cannot promise colours the pixels do not use. */
+
+.legend-slot {
+  margin: 14px 0 0;
+}
+.legend {
+  display: grid;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 14px 16px;
+}
+.legend-title {
+  margin: 0;
+}
+.legend-scale {
+  display: grid;
+  gap: 5px;
+  max-width: 460px;
+}
+.legend-strip {
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  /* A ramp that ends in transparency has to show what it is ending against. */
+  background-color: var(--bg);
+}
+.legend-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.legend-swatches {
   display: flex;
   flex-wrap: wrap;
+  gap: 6px 18px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--body);
+}
+.legend-swatches li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.legend-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--strong) 20%, transparent);
+  flex-shrink: 0;
+}
+.legend-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 78ch;
+}
+
+/* A real segmented control: five equal cells on a 2-column grid, the odd one
+   out spanning the row. It was a flex pile that laid out 2 + 2 + 1 with the
+   last item twice the width of its peers. */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
+.segmented .seg:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .seg {
-  flex: 1 1 auto;
   font-family: var(--font-mono);
   font-weight: 500;
   font-size: 11px;
@@ -1111,7 +1381,8 @@ p {
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--strong) 25%, var(--line));
   border-radius: var(--r-chip);
-  padding: 8px 12px;
+  padding: 9px 12px;
+  text-align: center;
   color: var(--muted);
   cursor: pointer;
   transition:
@@ -1180,10 +1451,13 @@ p {
   vertical-align: middle;
   color: var(--body);
 }
+/* A resting rule, because these are the only way to rename a region and with
+   a fully transparent border they read as static text. */
 .inline-input {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-bottom-color: color-mix(in srgb, var(--strong) 22%, var(--line));
+  border-radius: 4px 4px 0 0;
   color: var(--strong);
   font: inherit;
   font-size: 13px;
@@ -1193,19 +1467,24 @@ p {
 }
 .inline-input:hover {
   border-color: var(--line);
+  background: var(--bg);
 }
 .inline-input:focus {
   border-color: var(--accent);
+  background: var(--bg);
 }
 .inline-input:focus:not(:focus-visible) {
   outline: none;
 }
 
-.button-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
+.data-table tbody tr {
+  transition: background-color 0.15s ease;
 }
+.data-table tbody tr:hover,
+.data-table tbody tr:focus-within {
+  background: var(--tint);
+}
+
 .recording-list {
   list-style: none;
   margin: 0;
@@ -1220,8 +1499,56 @@ p {
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
-.recording-list .muted {
+.recording-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.recording-stats {
   font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* A 44%-tracked session used to be printed in exactly the same grey as a 91%
+   one, and folded into the same aggregate without a word. The tokens for this
+   already existed. */
+.signal-good {
+  color: var(--signal-good);
+}
+.signal-warn {
+  color: var(--signal-warn);
+}
+.signal-bad {
+  color: var(--signal-bad);
+}
+.recording-list li.is-low-signal {
+  /* A rule down the edge rather than a wash: the row still has to be readable,
+     and colour alone is not carrying the message — the badge says it too. */
+  border-left: 2px solid var(--signal-bad);
+  padding-left: 8px;
+  margin-left: -10px;
+}
+.quality-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--signal-bad);
+  border: 1px solid color-mix(in srgb, var(--signal-bad) 45%, transparent);
+  border-radius: var(--r-chip);
+  padding: 1px 8px;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+.note-warn {
+  border-color: color-mix(in srgb, var(--signal-warn) 45%, var(--line));
+}
+.checkbox-quiet {
+  font-size: 13px;
+  margin: 10px 0 0;
 }
 
 /* --- Regions ---------------------------------------------------------- */
@@ -1237,26 +1564,39 @@ p {
      a region, which is the entire interaction on a touch screen. */
   touch-action: none;
 }
+/* Region ink is token-driven, so the overlay can be flipped wholesale when the
+   stage goes dark — see .stage--spotlight below. */
 .aoi-box {
   position: absolute;
-  border: 1.5px solid #003f48;
-  background: color-mix(in srgb, #003f48 10%, transparent);
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   border-radius: 3px;
   pointer-events: auto;
   /* Double stroke — the annotation-tool trick — so the box still reads when
      the stimulus underneath is a dark screenshot. */
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .aoi-box.is-drawing {
   border-style: dashed;
   pointer-events: none;
 }
+/* Lit from its row in the AOI table. With five or six overlapping regions
+   there is otherwise no way to tell which row is which box. */
+.aoi-box.is-linked {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.8),
+    0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .aoi-label {
   position: absolute;
   top: -21px;
   left: -1px;
-  background: #003f48;
-  color: #fef6e9;
+  background: var(--accent);
+  color: var(--accent-contrast);
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
@@ -1274,8 +1614,8 @@ p {
   height: 18px;
   border-radius: 50%;
   border: 0;
-  background: #003f48;
-  color: #fef6e9;
+  background: var(--accent);
+  color: var(--accent-contrast);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -1287,7 +1627,27 @@ p {
   opacity: 1;
 }
 .aoi-remove:hover {
-  background: #bf3400;
+  background: var(--accent-warm-ink);
+}
+
+/* Spotlight dims the stage to a near-black mask, and a deep-teal box with a
+   dark label chip disappears into it — the two regions in the screenshot were
+   barely findable. Under the mask the region ink inverts to cream. */
+.stage--spotlight .aoi-box {
+  border-color: var(--bg);
+  background: color-mix(in srgb, var(--bg) 12%, transparent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.stage--spotlight .aoi-box.is-linked {
+  background: color-mix(in srgb, var(--bg) 28%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 0 0 4px color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.stage--spotlight .aoi-label,
+.stage--spotlight .aoi-remove {
+  background: var(--bg);
+  color: var(--accent);
 }
 
 /* --- Handheld --------------------------------------------------------- */
@@ -1318,18 +1678,19 @@ p {
   border-color: color-mix(in srgb, var(--strong) 25%, var(--line));
 }
 .btn-primary[disabled]:hover {
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 @media (max-width: 900px) {
   .results-layout {
     grid-template-columns: 1fr;
   }
-  /* One column means the sidebar flows with the page; its own scroll region
-     would nest scroll-within-scroll on touch. */
-  .results-sidebar {
-    max-height: none;
+  /* The screen no longer needs to reach the viewport floor once the stage and
+     the sidebar are stacked. */
+  .screen-fill {
+    min-height: 0;
   }
   .study-card {
     grid-template-columns: 1fr;

@@ -1,12 +1,13 @@
 import "./styles.css";
 
-import { deleteStudy, listStudies, newId, saveStudy } from "./data/store";
+import { deleteStudy, listRecordings, listStudies, newId, saveStudy } from "./data/store";
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
 import { FEATURE_BASIS_VERSION, FEATURE_DIM } from "./tracker/features";
 import { GazeEngine } from "./tracker/gaze";
 import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/regression";
 import { describeAccuracy, runCalibration } from "./ui/calibration";
+import { appBar, LAB_URL } from "./ui/chrome";
 import { clear, confirmButton, el } from "./ui/dom";
 import { runRecording } from "./ui/record";
 import { renderResults } from "./ui/results";
@@ -90,9 +91,6 @@ function storeCalibration(value: StoredCalibration | null): void {
 // tokens, same measure. See docs/lab-strategy.md on the site, under
 // "Experiments that live off-site".
 
-const SITE_URL = "https://ryankm.com";
-const LAB_URL = `${SITE_URL}/lab`;
-
 /** A phone cannot run a session, and the honest thing is to say so rather than
  * let someone spend a participant finding out.
  *
@@ -115,21 +113,9 @@ function isHandheld(): boolean {
 }
 
 function experimentHead(): HTMLElement {
-  // A bar rather than a breadcrumb. A breadcrumb is a same-origin device: it
-  // says "you are inside this section", and here the parent link leaves the
-  // origin, so it would be an exit dressed as a way back up. The wordmark and
-  // one route home are honest about being somewhere else, and they give a
-  // visitor who arrived from a search result something to arrive at.
-  const bar = el(
-    "div",
-    { class: "site-bar" },
-    el(
-      "div",
-      { class: "container bar-inner" },
-      el("a", { class: "wordmark", href: SITE_URL }, "Ryan McCarty", el("span", { class: "dot" }, ".")),
-      el("a", { class: "bar-back", href: LAB_URL }, "Back to the Lab", el("span", { "aria-hidden": "true" }, "↗"))
-    )
-  );
+  // The bar is shared with the session and results screens, which used to drop
+  // the chrome entirely — see ui/chrome.ts.
+  const bar = appBar();
 
   const meta = el(
     "div",
@@ -184,6 +170,23 @@ async function showStudyList(): Promise<void> {
   const editing = editingStudy;
   editingStudy = null;
 
+  // One listRecordings pass per study, up front. Without it the only way to
+  // find the study that has data is to open Results on each in turn.
+  const stats = new Map<string, StudyStats>(
+    await Promise.all(
+      studies.map(async (study): Promise<[string, StudyStats]> => {
+        const recordings = await listRecordings(study.id);
+        return [
+          study.id,
+          {
+            count: recordings.length,
+            lastRun: recordings.reduce((latest, r) => Math.max(latest, r.createdAt), 0) || null,
+          },
+        ];
+      })
+    )
+  );
+
   const header = experimentHead();
 
   const list = el("section", { class: "study-list" });
@@ -205,7 +208,7 @@ async function showStudyList(): Promise<void> {
     );
   } else {
     for (const study of studies) {
-      list.append(studyCard(study));
+      list.append(studyCard(study, stats.get(study.id) ?? { count: 0, lastRun: null }));
     }
   }
 
@@ -274,7 +277,27 @@ function handheldNotice(): HTMLElement | null {
   );
 }
 
-function studyCard(study: Study): HTMLElement {
+/** What a researcher needs to see without opening the study. */
+interface StudyStats {
+  count: number;
+  /** Timestamp of the most recent recording, or null if there are none. */
+  lastRun: number | null;
+}
+
+/** Coarse on purpose: "3 days ago" is what a researcher scans for, and a
+ * to-the-minute stamp on a list of ten studies is noise. */
+function relativeDay(timestamp: number, now = Date.now()): string {
+  const days = Math.floor((now - timestamp) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
+  const years = Math.round(days / 365);
+  return `${years} year${years === 1 ? "" : "s"} ago`;
+}
+
+function studyCard(study: Study, stats: StudyStats): HTMLElement {
   const thumb = el("div", { class: "study-thumb" });
   if (study.stimulus.kind === "image") {
     const url = URL.createObjectURL(study.stimulus.blob);
@@ -303,6 +326,15 @@ function studyCard(study: Study): HTMLElement {
       el(
         "p",
         { class: "study-meta" },
+        el(
+          "span",
+          { class: stats.count > 0 ? "study-count" : "study-count is-empty" },
+          stats.count > 0
+            ? `${stats.count} recording${stats.count === 1 ? "" : "s"}`
+            : "No recordings"
+        ),
+        stats.lastRun === null ? null : ` · last run ${relativeDay(stats.lastRun)}`,
+        " · ",
         study.stimulus.kind === "image"
           ? `${study.stimulus.width}×${study.stimulus.height} image`
           : study.stimulus.url,
@@ -332,11 +364,15 @@ function studyCard(study: Study): HTMLElement {
             { class: "btn btn-primary", type: "button", onclick: () => void runSession(study) },
             "Run session"
           ),
+      // Softened rather than disabled at zero: there is nothing to read yet,
+      // but the results screen is also where regions are drawn, and a study
+      // can usefully be marked up before the first participant sits down.
       el(
         "button",
         {
-          class: "btn",
+          class: stats.count > 0 ? "btn" : "btn btn-ghost",
           type: "button",
+          title: stats.count > 0 ? null : "No recordings yet — regions can still be drawn",
           onclick: () => void renderResults(app, study, () => void showStudyList()),
         },
         "Results"
@@ -403,8 +439,11 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     "label",
     { class: "drop-zone" },
     fileInput,
+    // A 1140×105 empty dashed rectangle reads as a gap in the layout rather
+    // than a target. The glyph gives it a centre of gravity.
+    el("span", { class: "drop-icon", "aria-hidden": "true" }, "↑"),
     dropTitle,
-    el("span", { class: "muted" }, "PNG or JPG · or use a URL below")
+    el("span", { class: "muted" }, "PNG or JPG · or use a URL")
   );
 
   let file: File | null = null;
@@ -486,17 +525,14 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
     void showStudyList();
   };
 
-  const form = el(
-    "form",
-    {
-      class: "panel",
-      // A short form should submit on Enter; the button alone does not give
-      // the fields that behavior.
-      onsubmit: (event: Event) => {
-        event.preventDefault();
-        void submit();
-      },
-    },
+  // Two columns, because the panel has two measures in it and they disagree:
+  // the copy wants a reading measure and the controls want the full width.
+  // Stacked, the display heading wrapped at ~380px with 60% of the panel empty
+  // beside it, and then the form ran full-bleed underneath. Side by side, the
+  // reading column *is* the measure, and the form owns the rest.
+  const copy = el(
+    "div",
+    { class: "setup-copy" },
     // The panel opens the way an experiment opens on the site: eyebrow, then
     // the claim in display type, then how to work it.
     el(
@@ -517,7 +553,12 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
           ? "Name, task and duration are safe to change mid-study. The stimulus image stays locked: every existing recording is aligned to it."
           : "Name, task, duration and the page URL can all change. Recordings already made keep the gaze they captured."
         : "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser. Nothing you upload and no frame of video ever leaves this machine."
-    ),
+    )
+  );
+
+  const controls = el(
+    "div",
+    { class: "setup-controls" },
     existing ? null : dropZone,
     el(
       "div",
@@ -536,6 +577,21 @@ function newStudyForm(existing: Study | null = null): HTMLElement {
         ? el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "Cancel")
         : null
     )
+  );
+
+  const form = el(
+    "form",
+    {
+      class: "panel setup-panel",
+      // A short form should submit on Enter; the button alone does not give
+      // the fields that behavior.
+      onsubmit: (event: Event) => {
+        event.preventDefault();
+        void submit();
+      },
+    },
+    copy,
+    controls
   );
 
   // Editing arrives from a button further down the page; bring the form and
@@ -691,6 +747,9 @@ async function runSession(study: Study): Promise<void> {
   );
 
   app.append(
+    // The session screen replaces the page, so it carries the site bar with it
+    // rather than leaving a participant on an unbranded card.
+    appBar(),
     el(
       "div",
       // screen-narrow centres the whole column: the session panel is a single
@@ -718,36 +777,67 @@ async function runSession(study: Study): Promise<void> {
     return;
   }
 
-  try {
-    await engine.start((message) => {
+  /** Starts the camera and arms the screen, or explains why it could not and
+   * offers the one thing worth doing next. The old version of this printed
+   * "Could not start the camera: undefined" whenever the loader rejected with
+   * a non-Error, and then returned before rendering any action at all — the
+   * operator was left with a dead teal rectangle and no way forward. */
+  const startCamera = async (): Promise<void> => {
+    clear(actions);
+    status.classList.remove("error");
+    status.textContent = "Starting camera…";
+    preview.classList.remove("is-dead");
+
+    try {
+      await engine.start((message) => {
+        status.textContent = message;
+      });
+    } catch (err) {
+      status.textContent = describeCameraFailure(err);
+      status.classList.add("error");
+      // A camera that never started has no picture to show. Hiding the frame
+      // beats leaving a dead solid-teal rectangle on the screen; it comes back
+      // if a retry succeeds.
+      preview.classList.add("is-dead");
+      clear(actions);
+      actions.append(
+        el(
+          "button",
+          { class: "btn btn-primary", type: "button", onclick: () => void startCamera() },
+          "Try again"
+        ),
+        el(
+          "button",
+          { class: "btn", type: "button", onclick: () => window.location.reload() },
+          "Reload the page"
+        ),
+        el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "Back to studies")
+      );
+      return;
+    }
+
+    status.textContent = "Camera running. Sit about an arm's length away, square to the screen.";
+
+    // Only rewrite the live region when the sentence actually changes: assigning
+    // on every frame would have a screen reader narrating the fps counter. The
+    // rate is quantised rather than left out of the comparison, because a figure
+    // read off the first tracked frame and then frozen would advertise a still-
+    // settling estimate as the session's throughput for the rest of the sitting.
+    let lastMessage = "";
+    releaseStatusListener?.();
+    releaseStatusListener = engine.onStatus((s) => {
+      const message = !s.faceVisible
+        ? "No face detected. Check your lighting and framing."
+        : !s.usable
+          ? "Face detected, but turned too far or too close to the edge of frame."
+          : `Tracking at ${Math.round(s.fps / 5) * 5} fps. Ready to calibrate.`;
+      if (message === lastMessage) return;
+      lastMessage = message;
       status.textContent = message;
     });
-  } catch (err) {
-    status.textContent =
-      err instanceof DOMException && err.name === "NotAllowedError"
-        ? "Camera access was blocked. Allow the camera in your browser settings and reload."
-        : `Could not start the camera: ${(err as Error).message}`;
-    status.classList.add("error");
-    return;
-  }
 
-  status.textContent = "Camera running. Sit about an arm's length away, square to the screen.";
-
-  // Only rewrite the live region when the state actually changes: updating on
-  // every frame would have a screen reader narrating the fps counter.
-  let statusCategory = "";
-  releaseStatusListener = engine.onStatus((s) => {
-    const category = !s.faceVisible ? "no-face" : !s.usable ? "unusable" : "tracking";
-    if (category === statusCategory) return;
-    statusCategory = category;
-    if (category === "no-face") {
-      status.textContent = "No face detected. Check your lighting and framing.";
-    } else if (category === "unusable") {
-      status.textContent = "Face detected, but turned too far or too close to the edge of frame.";
-    } else {
-      status.textContent = `Tracking at ${Math.round(s.fps)} fps. Ready to calibrate.`;
-    }
-  });
+    renderActions();
+  };
 
   const beginRecording = async (validationError: number | null) => {
     // The recording screen has its own face-lost readout; this one would only
@@ -857,7 +947,39 @@ async function runSession(study: Study): Promise<void> {
     }
   }
 
-  renderActions();
+  void startCamera();
+}
+
+/**
+ * A sentence an operator can act on, whatever the camera stack threw.
+ *
+ * MediaPipe's loader can reject with something that is not an Error at all,
+ * and interpolating `.message` off that produced the literal string
+ * "Could not start the camera: undefined" — the worst kind of error message,
+ * because it tells you only that the code did not expect to be here.
+ */
+function describeCameraFailure(err: unknown): string {
+  if (err instanceof DOMException) {
+    if (err.name === "NotAllowedError") {
+      return "Camera access was blocked. Allow the camera in your browser settings, then try again.";
+    }
+    if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+      return "No camera was found. Connect one — or check that another profile has not claimed it — then try again.";
+    }
+    if (err.name === "NotReadableError") {
+      return "The camera is already in use by another app or tab. Close that one, then try again.";
+    }
+  }
+
+  const detail =
+    err instanceof Error && err.message
+      ? err.message
+      : typeof err === "string" && err
+        ? err
+        : "";
+  return detail
+    ? `Could not start the camera: ${detail}`
+    : "Could not start the camera, and the browser gave no reason. This is usually a blocked permission, a camera another app is holding, or the face model failing to download.";
 }
 
 function readImageDimensions(file: File): Promise<{ width: number; height: number }> {

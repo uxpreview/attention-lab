@@ -72,10 +72,37 @@ function buildRamp(): Uint8ClampedArray {
 
 const COLOUR_LUT = buildRamp();
 
+/** Width of one contour band in intensity units, and how many that makes. */
+const BAND_STEP = 32;
+export const CONTOUR_BANDS = 256 / BAND_STEP;
+
+/**
+ * The ramp as a CSS colour, for legends.
+ *
+ * A legend that hard-codes its own gradient is a legend that drifts: change
+ * RAMP above and the strip under the stage keeps promising the old colours. So
+ * the only way to get a swatch is to ask the same lookup table the pixels came
+ * from. `t` is 0 (coldest) to 1 (the display ceiling).
+ */
+export function rampColour(t: number): string {
+  const i = Math.max(0, Math.min(255, Math.round(t * 255)));
+  return `rgb(${COLOUR_LUT[i * 3]}, ${COLOUR_LUT[i * 3 + 1]}, ${COLOUR_LUT[i * 3 + 2]})`;
+}
+
+/** The visible contour bands, coldest first. Band 0 is drawn transparent. */
+export function contourBandColours(): string[] {
+  const out: string[] = [];
+  for (let band = 1; band < CONTOUR_BANDS; band++) {
+    out.push(rampColour((band * BAND_STEP) / 255));
+  }
+  return out;
+}
+
 /** How aggressively the spotlight view reveals moderately-attended regions. */
 const SPOTLIGHT_BOOST = 1.8;
-/** Dimming applied where nobody looked. Short of opaque, so context survives. */
-const SPOTLIGHT_MAX_DIM = 232;
+/** Dimming applied where nobody looked. Short of opaque, so context survives.
+ * Exported so the spotlight legend can show the real dim rather than a guess. */
+export const SPOTLIGHT_MAX_DIM = 232;
 
 /**
  * Renders points onto a canvas, replacing its contents. The canvas is expected
@@ -141,27 +168,55 @@ export function renderHeatmap(
 
   // Pass 2: colour the accumulated field.
   const out = ctx.createImageData(width, height);
-  const dst = out.data;
+  paintField(field, out.data, style, scale, opacity);
+
+  // Note: putImageData ignores globalAlpha and composite state, so overlay
+  // opacity has to be baked into the alpha channel by paintField rather than
+  // set here.
+  ctx.putImageData(out, 0, 0);
+}
+
+/**
+ * Maps an accumulated intensity field onto RGBA overlay pixels, writing into
+ * `dst` (which is assumed to start transparent). `scale` converts field units
+ * to the 0-255 intensity the ramp is indexed by.
+ *
+ * Exported for the test suite. Spotlight in particular is easy to get subtly
+ * wrong: it is a mask rather than an overlay, so it has to write *every* pixel.
+ */
+export function paintField(
+  field: Float32Array,
+  dst: Uint8ClampedArray,
+  style: HeatmapStyle,
+  scale: number,
+  opacity: number
+): void {
+  if (style === "spotlight") {
+    // Inverse map: dim everything, reveal what was looked at. The reveal is
+    // boosted because a linear one leaves moderately-attended regions almost as
+    // dark as ignored ones, which reads as "nobody looked at anything".
+    //
+    // Every pixel is written, including the faint rim of a splat: skipping the
+    // ones that round to zero intensity leaves them fully transparent, which
+    // punches an undimmed halo through the mask around every hot spot. The
+    // colour channels stay at zero — the dimming is pure alpha.
+    for (let j = 0; j < field.length; j++) {
+      const reveal = Math.min(1, ((field[j] * scale) / 255) * SPOTLIGHT_BOOST);
+      dst[j * 4 + 3] = Math.round(SPOTLIGHT_MAX_DIM * (1 - reveal));
+    }
+    return;
+  }
 
   for (let j = 0; j < field.length; j++) {
     const raw = field[j];
     if (raw === 0) continue;
-    const i = j * 4;
     const intensity = Math.min(255, Math.round(raw * scale));
     if (intensity === 0) continue;
+    const i = j * 4;
 
-    if (style === "spotlight") {
-      // Inverse map: dim everything, reveal what was looked at. The reveal is
-      // boosted because a linear one leaves moderately-attended regions almost
-      // as dark as ignored ones, which reads as "nobody looked at anything".
-      const reveal = Math.min(1, (intensity / 255) * SPOTLIGHT_BOOST);
-      dst[i] = 0;
-      dst[i + 1] = 0;
-      dst[i + 2] = 0;
-      dst[i + 3] = Math.round(SPOTLIGHT_MAX_DIM * (1 - reveal));
-    } else if (style === "contour") {
+    if (style === "contour") {
       // Banded ramp: reads as an isoline map, easier to cite exact regions from.
-      const band = Math.floor(intensity / 32) * 32;
+      const band = Math.floor(intensity / BAND_STEP) * BAND_STEP;
       dst[i] = COLOUR_LUT[band * 3];
       dst[i + 1] = COLOUR_LUT[band * 3 + 1];
       dst[i + 2] = COLOUR_LUT[band * 3 + 2];
@@ -175,24 +230,6 @@ export function renderHeatmap(
       dst[i + 3] = Math.round(opacity * 255 * fade);
     }
   }
-
-  if (style === "spotlight") {
-    // Regions with no gaze at all get the full dim treatment — but not opaque
-    // black, so the reader can still see what was ignored.
-    for (let j = 0; j < field.length; j++) {
-      if (field[j] === 0) {
-        const i = j * 4;
-        dst[i] = 0;
-        dst[i + 1] = 0;
-        dst[i + 2] = 0;
-        dst[i + 3] = SPOTLIGHT_MAX_DIM;
-      }
-    }
-  }
-
-  // Note: putImageData ignores globalAlpha and composite state, so overlay
-  // opacity has to be baked into the alpha channel above rather than set here.
-  ctx.putImageData(out, 0, 0);
 }
 
 /**

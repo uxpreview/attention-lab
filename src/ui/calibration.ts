@@ -1,3 +1,4 @@
+import { ERROR_BAD_DEG, ERROR_GOOD_DEG, pxToDegrees } from "../analysis/quality";
 import type { CalibrationSample, GazeEngine } from "../tracker/gaze";
 import { el, inertSiblings, sleep } from "./dom";
 
@@ -31,6 +32,63 @@ const VALIDATION_POINTS: Array<[number, number]> = [
 const SETTLE_MS = 350;
 /** Milliseconds of samples to collect per point. */
 const DWELL_MS = 900;
+/** How long the participant has to hold their gaze after clicking. */
+const HOLD_MS = SETTLE_MS + DWELL_MS;
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+/** Ring geometry, in the ring's own 48-unit viewBox. */
+const RING_RADIUS = 21;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * A determinate ring around the active dot, sweeping over the settle + dwell
+ * window.
+ *
+ * Before this, the only cue that sampling was in progress was a colour swap,
+ * and the instructions said "keep looking until it stops pulsing" — the exact
+ * inverse of the truth, because the dot stops pulsing when it is clicked, at
+ * the *start* of the hold. A participant who let go on that cue gave every
+ * point 0ms of usable dwell, and nothing about the resulting calibration would
+ * have looked wrong.
+ *
+ * Driven by the Web Animations API rather than CSS: the page neutralises every
+ * CSS animation under prefers-reduced-motion, and this one is a progress
+ * readout rather than decoration — removing it would take the only cue with it.
+ */
+function calibrationRing(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "calib-ring");
+  svg.setAttribute("viewBox", "0 0 48 48");
+  svg.setAttribute("aria-hidden", "true");
+
+  const track = document.createElementNS(SVG_NS, "circle");
+  track.setAttribute("class", "calib-ring-track");
+  track.setAttribute("cx", "24");
+  track.setAttribute("cy", "24");
+  track.setAttribute("r", String(RING_RADIUS));
+
+  const sweep = document.createElementNS(SVG_NS, "circle");
+  sweep.setAttribute("class", "calib-ring-sweep");
+  sweep.setAttribute("cx", "24");
+  sweep.setAttribute("cy", "24");
+  sweep.setAttribute("r", String(RING_RADIUS));
+  sweep.setAttribute("stroke-dasharray", String(RING_CIRCUMFERENCE));
+  sweep.setAttribute("stroke-dashoffset", String(RING_CIRCUMFERENCE));
+
+  svg.append(track, sweep);
+  return svg;
+}
+
+/** Starts the sweep and returns a function that stops and resets it. */
+function sweepRing(dot: HTMLElement): () => void {
+  const sweep = dot.querySelector<SVGCircleElement>(".calib-ring-sweep");
+  if (!sweep || typeof sweep.animate !== "function") return () => {};
+  const animation = sweep.animate(
+    [{ strokeDashoffset: RING_CIRCUMFERENCE }, { strokeDashoffset: 0 }],
+    { duration: HOLD_MS, easing: "linear", fill: "forwards" }
+  );
+  return () => animation.cancel();
+}
 
 export interface CalibrationOutcome {
   cancelled: boolean;
@@ -53,14 +111,18 @@ export async function runCalibration(
   const guidance = el(
     "p",
     {},
-    "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until it stops pulsing. Esc cancels."
+    "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until the ring around it completes. Esc cancels."
   );
   const instruction = el("div", { class: "calib-instruction" }, heading, guidance);
   // The counter lives outside the instruction block: the instructions dim
   // after the first dot, and progress is the one thing that has to stay
   // visible for all eighteen clicks — it is what buys participant patience.
   const progress = el("p", { class: "calib-progress", role: "status" });
-  const dot = el("button", { class: "calib-dot", type: "button", "aria-label": "Calibration point" });
+  const dot = el(
+    "button",
+    { class: "calib-dot", type: "button", "aria-label": "Calibration point" },
+    calibrationRing()
+  );
   const cancelBtn = el(
     "button",
     { class: "btn btn-ghost btn-small calib-cancel", type: "button" },
@@ -114,7 +176,8 @@ export async function runCalibration(
 
     instruction.classList.remove("is-dim");
     heading.textContent = "Accuracy check";
-    guidance.textContent = "Five more dots. These measure how accurate the calibration actually is.";
+    guidance.textContent =
+      "Five more dots. Same again — click, then hold until the ring completes. These measure how accurate the calibration actually is.";
 
     const pointErrors: number[] = [];
     for (let i = 0; i < VALIDATION_POINTS.length; i++) {
@@ -179,6 +242,7 @@ async function collectAtPoint(
   if (!clicked) return "abandoned";
 
   dot.classList.add("is-active");
+  const stopRing = sweepRing(dot);
 
   let blurred = false;
   const onBlur = () => {
@@ -193,6 +257,7 @@ async function collectAtPoint(
   engine.stopCollecting();
 
   window.removeEventListener("blur", onBlur);
+  stopRing();
   dot.classList.remove("is-active");
 
   if (signal.aborted) return "abandoned";
@@ -219,6 +284,7 @@ async function measureAtPoint(
   if (!clicked) return null;
 
   dot.classList.add("is-active");
+  const stopRing = sweepRing(dot);
 
   let blurred = false;
   const onBlur = () => {
@@ -235,6 +301,7 @@ async function measureAtPoint(
   off();
 
   window.removeEventListener("blur", onBlur);
+  stopRing();
   dot.classList.remove("is-active");
 
   if (signal.aborted) return null;
@@ -273,7 +340,9 @@ function waitForClick(dot: HTMLButtonElement, signal: AbortSignal): Promise<bool
  * Turns validation error into language a researcher can act on. The thresholds
  * are in degrees of visual angle at an assumed 60cm viewing distance, which is
  * the unit eye-tracking literature uses; commercial trackers claim 0.5°, and
- * webcam tracking lands around 1.5-3° on a good day.
+ * webcam tracking lands around 1.5-3° on a good day. They live in
+ * analysis/quality.ts, shared with the results screen's quality flags, so the
+ * word "poor" here and a flagged row there can never mean different things.
  */
 export function describeAccuracy(errorPx: number | null): {
   grade: "good" | "usable" | "poor" | "unknown";
@@ -285,14 +354,14 @@ export function describeAccuracy(errorPx: number | null): {
   }
 
   const degrees = pxToDegrees(errorPx);
-  if (degrees < 2) {
+  if (degrees < ERROR_GOOD_DEG) {
     return {
       grade: "good",
       label: `Good: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
       detail: "Reliable enough for region-level conclusions on a wireframe.",
     };
   }
-  if (degrees < 4) {
+  if (degrees < ERROR_BAD_DEG) {
     return {
       grade: "usable",
       label: `Usable: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
@@ -304,14 +373,4 @@ export function describeAccuracy(errorPx: number | null): {
     label: `Poor: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
     detail: "Recalibrate: improve lighting, sit square to the screen, and stay still.",
   };
-}
-
-/**
- * Converts pixels to approximate degrees of visual angle. Assumes ~96 CSS ppi
- * and a 60cm viewing distance — both are rough, which is why the UI always
- * shows the raw pixel figure alongside.
- */
-export function pxToDegrees(px: number, viewingDistanceCm = 60): number {
-  const cm = (px / 96) * 2.54;
-  return (Math.atan2(cm, viewingDistanceCm) * 180) / Math.PI;
 }
