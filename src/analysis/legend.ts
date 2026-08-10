@@ -58,6 +58,55 @@ export interface LegendSwatch {
   label: string;
 }
 
+/** A value printed under the strip, at the fraction of it that carries it. */
+export interface LegendTick {
+  /** 0 at the cold end, 1 at the hot end. */
+  at: number;
+  label: string;
+}
+
+/**
+ * What the top of the colour axis is worth, for the selection on the stage.
+ *
+ * `renderHeatmap` returns this — a percentile of the per-blob peaks of the
+ * accumulated field — and the field is summed fixation duration in
+ * milliseconds, Gaussian-weighted by distance within a splat radius. So the
+ * number is "roughly this many milliseconds of looking, gathered in one spot",
+ * which is what a reader asking "how much is dark red?" wants and is close
+ * enough to a dwell figure to be worth printing. It is a ceiling, not a maximum:
+ * anything above it saturates, hence the ≥ on the label.
+ */
+export interface LegendScale {
+  /** Field units at the hot end of the ramp; the cold end is always 0. */
+  ceiling: number;
+}
+
+/** Rounds to something a person would read off an axis, in the same units the
+ * rail's own numbers are in (see formatMs in ui/dom.ts). Coarse on purpose: the
+ * ceiling is a percentile estimate over blob peaks, and printing "1,237ms"
+ * would claim a precision the statistic does not have. */
+function formatScaleValue(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0ms";
+  if (ms >= 1000) {
+    const seconds = ms / 1000;
+    return `${seconds >= 10 ? Math.round(seconds) : seconds.toFixed(1)}s`;
+  }
+  const step = ms >= 100 ? 10 : 5;
+  return `${Math.max(step, Math.round(ms / step) * step)}ms`;
+}
+
+/** Both ends and the midpoint of a duration axis. Three is what a 460px strip
+ * holds without the labels touching, and the midpoint is the one interior value
+ * a reader actually uses — "is this blob half of the hot end, or a tenth of
+ * it?". The ceiling carries a ≥ because everything above it saturates. */
+function durationTicks(ceiling: number): LegendTick[] {
+  return [
+    { at: 0, label: "0ms" },
+    { at: 0.5, label: formatScaleValue(ceiling * 0.5) },
+    { at: 1, label: `≥${formatScaleValue(ceiling)}` },
+  ];
+}
+
 export interface LegendSpec {
   /** What the colour axis is measuring. */
   title: string;
@@ -67,6 +116,10 @@ export interface LegendSpec {
   banded: boolean;
   minLabel: string;
   maxLabel: string;
+  /** Values printed along the strip, when the axis has units and the caller
+   * knew what the scale was set to. Null for the qualitative overlays, and for
+   * a heatmap drawn before the ceiling is known. */
+  ticks: LegendTick[] | null;
   /** A colour-per-thing key, or null when the scale is continuous. */
   swatches: LegendSwatch[] | null;
   /** The caveat a reader needs before citing the picture. */
@@ -90,7 +143,11 @@ function scanpathStops(count = 7): string[] {
  * order the raw view draws them, because that is what makes its swatches
  * attributable.
  */
-export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec {
+export function legendFor(
+  mode: OverlayMode,
+  participants: string[],
+  scale: LegendScale | null = null
+): LegendSpec {
   switch (mode) {
     case "heat":
       return {
@@ -99,12 +156,13 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         banded: false,
         minLabel: "Clear: no attention",
         maxLabel: "Most looked at",
+        ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
         // The percentile named here is the one renderHeatmap actually defaults
         // to, and it is a percentile of the per-blob peaks rather than of the
         // pixels — see fieldCeiling. It said "98th" for a clamp that no longer
         // exists.
-        note: "Colour is total fixation duration (ms) summed over the selected participants, scaled so the 90th percentile of the attention peaks saturates the hot end. Areas nobody fixated are left clear rather than tinted, so the paint is the finding. The scale is relative to this selection — colours are not comparable between studies.",
+        note: "Colour is total fixation duration (ms) summed over the selected participants, scaled so the 90th percentile of the attention peaks saturates the hot end — the figure printed at the top of the axis, which anything hotter reaches too. Areas nobody fixated are left clear rather than tinted, so the paint is the finding. The scale is relative to this selection — colours are not comparable between studies.",
       };
     case "contour":
       return {
@@ -113,6 +171,9 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         banded: true,
         minLabel: "Lowest drawn band",
         maxLabel: "Most looked at",
+        // The bands are equal slices of the same scale the heatmap uses, so the
+        // same ticks name them.
+        ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
         note: "The same fixation-duration scale as the heatmap, quantised into equal bands so a region can be cited by band. Below the first band is left clear.",
       };
@@ -127,6 +188,10 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         banded: false,
         minLabel: "Dimmed: unlooked",
         maxLabel: "Clear: looked at",
+        // A mask has no unit: reveal is a boosted function of the same field,
+        // and printing milliseconds under it would name a quantity the picture
+        // does not encode.
+        ticks: null,
         swatches: null,
         note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed. Reveal is boosted, so a moderately-attended region clears fully.",
       };
@@ -137,6 +202,7 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         banded: false,
         minLabel: "First",
         maxLabel: "Last",
+        ticks: null,
         swatches: null,
         // The ramp is viridis rather than a hue sweep, so the strip above reads
         // as an ordering on its own — dark to light — and survives greyscale
@@ -152,6 +218,7 @@ export function legendFor(mode: OverlayMode, participants: string[]): LegendSpec
         banded: false,
         minLabel: "",
         maxLabel: "",
+        ticks: null,
         swatches: participants.map((label, i) => ({ colour: participantColour(i), label })),
         note: "Every gaze sample, roughly 30 per second, before fixation detection. Density reads as saturation; a lone dot is as likely to be tracker noise as a look.",
       };

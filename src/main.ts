@@ -481,37 +481,48 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
     el(
       "div",
       { class: "study-actions" },
+      // Two fixed slots, two fixed treatments.
+      //
+      // The fill used to move: filled on Run session at zero recordings and on
+      // Results once there were any, so down a list of three studies the one
+      // high-contrast teal pill jumped between the first and the second column
+      // and the eye could not establish either. On twenty studies that is a row
+      // you have to re-read individually every time. It also put three filled
+      // pills on one screen, against the rule .btn-primary states for itself.
+      //
+      // So neither row action is filled — the screen's one filled pill is "New
+      // study" in the list head — and "this study has data" is said where a
+      // researcher already scans for it: the recording count at the head of the
+      // meta line, which is --strong at 600 with data and muted without (see
+      // .study-count). Emphasis in the type, not in the buttons.
+      //
       // Where a session cannot run the button is disabled rather than hidden: a
       // control that vanishes leaves you wondering whether the tool is broken,
       // and the title says which of the two reasons applies.
-      // Filled only where the work is still to be done. A list of three studies
-      // used to render three filled teal "Run session" pills — three competing
-      // primaries on one screen, against the rule stated on .btn-primary that
-      // there is one — and it ranked them wrongly: on a study with five
-      // recordings the loud button was Run session while Results, the one with
-      // data behind it, was a quiet outline, and a study with nothing in it got
-      // exactly the same loud treatment. Emphasis now tracks the state of the
-      // study: run it, then read it.
-      runSessionButton(study, stats.count === 0),
-      // Softened rather than disabled at zero: there is nothing to read yet,
-      // but the results screen is also where regions are drawn, and a study
-      // can usefully be marked up before the first participant sits down — the
-      // screen keeps its region tools at zero recordings, so the tooltip is a
-      // promise the app now actually honours.
+      runSessionButton(study),
+      // Not disabled at zero: there is nothing to read yet, but the results
+      // screen is also where regions are drawn, and a study can usefully be
+      // marked up before the first participant sits down — the screen keeps its
+      // region tools at zero recordings, so the tooltip is a promise the app
+      // actually honours.
       el(
         "button",
         {
-          class: stats.count > 0 ? "btn btn-primary" : "btn btn-ghost",
+          class: "btn",
           type: "button",
           title: stats.count > 0 ? null : "No recordings yet — regions can still be drawn",
           onclick: () => void openResults(study),
         },
         "Results"
       ),
+      // Quiet, but bordered. These two were `.btn-ghost`, which with Results
+      // also borderless at zero recordings left three of the four controls
+      // reading as text links of identical weight — with the app's only
+      // irreversible action sitting last in that undifferentiated run.
       el(
         "button",
         {
-          class: "btn btn-ghost btn-small",
+          class: "btn btn-quiet btn-small",
           type: "button",
           onclick: () => {
             // Recordings are irreplaceable participant time, so a typo in a
@@ -527,14 +538,11 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
   );
 }
 
-/** `primary` is the study's own state, not a style choice: a study with no
- * recordings has exactly one thing worth doing, and a study with recordings has
- * a different one. See the note at the call site. */
-function runSessionButton(study: Study, primary: boolean): HTMLButtonElement {
+function runSessionButton(study: Study): HTMLButtonElement {
   const btn = el(
     "button",
     {
-      class: primary ? "btn btn-primary" : "btn",
+      class: "btn",
       type: "button",
       // Re-checked at click time rather than trusted from render time: the
       // window can be resized between the two.
@@ -569,10 +577,17 @@ function openResults(study: Study): Promise<void> {
 }
 
 function studyDeleteButton(study: Study): HTMLButtonElement {
-  const btn = confirmButton("Delete", "Really delete?", async () => {
-    await deleteStudy(study.id);
-    void showStudyList();
-  });
+  const btn = confirmButton(
+    "Delete",
+    "Really delete?",
+    async () => {
+      await deleteStudy(study.id);
+      void showStudyList();
+    },
+    // Bordered like Edit beside it, rather than a fourth borderless word in the
+    // row. It still arms into --signal-bad on the first press.
+    "btn btn-quiet btn-small"
+  );
   btn.setAttribute("aria-label", `Delete study ${study.name} and all of its recordings`);
   return btn;
 }

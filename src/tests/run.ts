@@ -16,6 +16,7 @@ import {
   fieldPercentile,
   paintField,
   rampColour,
+  renderHeatmap,
 } from "../analysis/heatmap";
 import { legendFor, participantColour, PARTICIPANT_COLOURS } from "../analysis/legend";
 import { gradeError, gradeRecording, gradeTracking, isLowSignal } from "../analysis/quality";
@@ -638,6 +639,54 @@ section("Heatmap display ceiling");
   check("a single cluster still scales to its own peak", Math.abs(loneCeiling - 1) < 0.01, `${loneCeiling.toFixed(3)}`);
 
   check("an empty field yields a zero ceiling", fieldCeiling(new Float32Array(64), 8, 8, 4) === 0);
+
+  // What the legend is allowed to print.
+  //
+  // The strip under the stage now carries millisecond values, and the only
+  // defensible source for them is the renderer itself — the ceiling is a
+  // percentile of this selection's own blob peaks, so anything recomputed
+  // beside it would be a second opinion. renderHeatmap hands it back in the
+  // units the weights came in, which is what makes "≥1.2s" a fact about the
+  // picture rather than a label stuck under it.
+  const shim = {
+    width: 200,
+    height: 200,
+    getContext: () => ({
+      clearRect: () => {},
+      createImageData: (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      putImageData: () => {},
+    }),
+  } as unknown as HTMLCanvasElement;
+
+  // One fixation, alone on the stimulus: the hot end of the ramp is worth
+  // exactly that fixation, so the legend can print its duration. The kernel's
+  // rim subtraction would otherwise report it 13.5% low.
+  const dwell = 900;
+  const returned = renderHeatmap(shim, [{ x: 0.5, y: 0.5, weight: dwell }], { radiusRatio: 0.055 });
+  check(
+    "the renderer hands back its ceiling in the weights' own units",
+    Math.abs(returned - dwell) / dwell < 0.02,
+    `${returned.toFixed(0)} for a ${dwell}ms fixation`
+  );
+  // Two fixations in one spot are two fixations' worth of looking, which is
+  // what makes the axis a duration axis rather than an index.
+  const doubled = renderHeatmap(
+    shim,
+    [
+      { x: 0.5, y: 0.5, weight: dwell },
+      { x: 0.5, y: 0.5, weight: dwell },
+    ],
+    { radiusRatio: 0.055 }
+  );
+  check(
+    "stacked dwell sums on the axis",
+    Math.abs(doubled - 2 * dwell) / (2 * dwell) < 0.02,
+    `${doubled.toFixed(0)} for two ${dwell}ms fixations`
+  );
+  check(
+    "nothing to draw means no scale to print",
+    renderHeatmap(shim, []) === 0
+  );
 }
 
 // --- Overlay painting ----------------------------------------------------
@@ -1049,11 +1098,47 @@ section("Overlay legends");
   check("the heat legend names its units", /fixation duration/i.test(heat.note));
   check("the heat legend says the scale is relative", /relative to this selection/i.test(heat.note));
 
+  // The numbered axis. A legend in a tool whose product is numbers should say
+  // what the hot end is worth — but only when the caller knows, because the
+  // ceiling is a percentile of one particular selection's blob peaks.
+  check("a heat legend with no scale prints no numbers", heat.ticks === null);
+  const scaled = legendFor("heat", ["P01"], { ceiling: 1240 });
+  check("a scale puts ticks on the heat legend", scaled.ticks?.length === 3);
+  check("the ticks span the whole strip", scaled.ticks?.[0].at === 0 && scaled.ticks?.[2].at === 1);
+  check("the cold end is zero", scaled.ticks?.[0].label === "0ms");
+  // Above the ceiling saturates, so the top of the axis is a bound and says so.
+  check("the hot end names the ceiling", scaled.ticks?.[2].label === "≥1.2s", scaled.ticks?.[2].label);
+  check("the midpoint is half the ceiling", scaled.ticks?.[1].label === "620ms", scaled.ticks?.[1].label);
+  // Sub-second ceilings stay in the units the rail beside them uses.
+  check(
+    "a short ceiling reads in milliseconds",
+    legendFor("heat", [], { ceiling: 480 }).ticks?.[2].label === "≥480ms"
+  );
+  // A ceiling of zero is "nothing was drawn", not "the hot end is 0ms".
+  check("an empty selection prints no numbers", legendFor("heat", [], { ceiling: 0 }).ticks === null);
+  // The caveat is the reason the numbers are safe to print at all, so it stays
+  // under a legend that now has numbers on it.
+  check(
+    "the numbered legend keeps the cross-study caveat",
+    /not comparable between studies/i.test(scaled.note)
+  );
+
   const contour = legendFor("contour", []);
   check("the contour legend is banded", contour.banded === true);
   check(
     "the contour legend has one swatch per drawn band",
     contour.stops?.length === contourBandColours().length
+  );
+  // The bands are equal slices of the same scale, so they take the same ticks.
+  check(
+    "contour bands are numbered from the same scale",
+    legendFor("contour", [], { ceiling: 1240 }).ticks?.[2].label === "≥1.2s"
+  );
+  // A mask encodes "revealed or not"; milliseconds under it would name a
+  // quantity the picture does not carry.
+  check(
+    "the spotlight mask stays unnumbered",
+    legendFor("spotlight", [], { ceiling: 1240 }).ticks === null
   );
 
   const scanpath = legendFor("scanpath", ["P01"]);

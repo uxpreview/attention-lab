@@ -156,12 +156,20 @@ export const SPOTLIGHT_MAX_DIM = 232;
 /**
  * Renders points onto a canvas, replacing its contents. The canvas is expected
  * to already be sized to the stimulus display area.
+ *
+ * Returns the value the hot end of the ramp was scaled to, in the same units
+ * the weights came in — milliseconds of summed fixation duration, gathered
+ * within about a splat radius and Gaussian-weighted by distance. The legend
+ * needs it: a colour axis in a tool whose product is numbers should say what
+ * the top of it is worth, and only the renderer knows, because the ceiling is a
+ * percentile of this particular selection's blob peaks. Zero when there was
+ * nothing to draw.
  */
 export function renderHeatmap(
   canvas: HTMLCanvasElement,
   points: HeatPoint[],
   options: HeatmapOptions = {}
-): void {
+): number {
   const style = options.style ?? "heat";
   const radiusRatio = options.radiusRatio ?? 0.06;
   const opacity = options.opacity ?? 0.72;
@@ -170,10 +178,10 @@ export function renderHeatmap(
   const width = canvas.width;
   const height = canvas.height;
   const ctx = canvas.getContext("2d");
-  if (!ctx || width === 0 || height === 0) return;
+  if (!ctx || width === 0 || height === 0) return 0;
 
   ctx.clearRect(0, 0, width, height);
-  if (points.length === 0) return;
+  if (points.length === 0) return 0;
 
   const radius = Math.max(12, Math.min(width, height) * radiusRatio);
 
@@ -224,6 +232,15 @@ export function renderHeatmap(
   // opacity has to be baked into the alpha channel by paintField rather than
   // set here.
   ctx.putImageData(out, 0, 0);
+
+  // Back into the units the weights arrived in. The kernel is truncated at
+  // `radius` and has its rim value subtracted so a splat reaches zero smoothly,
+  // which costs every splat a fixed fraction of its weight — at sigma = radius/2
+  // that is exp(-2), about 13.5%. Left in, a lone 900ms fixation would put "780ms"
+  // on the legend, and the axis would read low by a constant nobody could see. So
+  // the reported ceiling is divided back out: one fixation dead centre of the
+  // hottest cluster is worth its own duration.
+  return ceiling / (1 - rim);
 }
 
 /**

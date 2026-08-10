@@ -109,9 +109,23 @@ export interface OrdinalBounds {
 /** Ordinal size bounds, in CSS pixels before {@link ScanpathOptions.scale}.
  * The floor is the payload's legibility floor: the order of the sequence is the
  * only thing a scanpath says, and a numeral that needs leaning in to read says
- * it to nobody. */
-const MIN_ORDINAL_PX = 14;
+ * it to nobody. It was 14, which with the halo below eating ~3px of it rendered
+ * the displaced ordinals — the ones already hardest to attach to a circle — as
+ * dark grey scratches rather than white numerals. */
+const MIN_ORDINAL_PX = 16;
 const MAX_ORDINAL_PX = 30;
+
+/**
+ * The widest contrast halo a numeral can carry, in device pixels.
+ *
+ * The halo is stroked and then the glyph is filled over it, so the stroke shows
+ * outside the numeral — and inside its counters, which are holes in the fill.
+ * At the previous `fontSize * 0.22` a 16px "8" got a 3.5px stroke, more than
+ * the counter is wide, and the numeral closed up into a solid mark. This caps
+ * it at a width no counter at the floor size can be swallowed by, and the cap
+ * scales with the device so a retina canvas does not halve it.
+ */
+const MAX_ORDINAL_HALO_PX = 2.5;
 
 /** Canvas text metrics are unavailable in the headless figure shim, and
  * measureText is overkill for two or three digits: the numerals are tabular
@@ -365,10 +379,13 @@ export function renderScanpath(
   }
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  ctx.lineWidth = 5 * scale;
+  // Both strokes are floored in device pixels. A saccade drawn under 1.5px is a
+  // scratch that disappears into a wireframe's own hairlines, and the lines
+  // between the circles are half of what makes a scanpath a path.
+  ctx.lineWidth = Math.max(3.5, 5 * scale);
   ctx.strokeStyle = "rgba(255,255,255,0.85)";
   ctx.stroke(saccades);
-  ctx.lineWidth = 2 * scale;
+  ctx.lineWidth = Math.max(1.5, 2 * scale);
   ctx.strokeStyle = "rgba(20,26,38,0.8)";
   ctx.stroke(saccades);
 
@@ -415,13 +432,17 @@ export function renderScanpath(
       const dx = spot.x - c.x;
       const dy = spot.y - c.y;
       const length = Math.hypot(dx, dy) || 1;
-      ctx.lineWidth = 3 * scale;
+      ctx.lineWidth = Math.max(3, 3 * scale);
       ctx.strokeStyle = "rgba(255,255,255,0.85)";
       ctx.beginPath();
       ctx.moveTo(c.x + (dx / length) * c.radius, c.y + (dy / length) * c.radius);
       ctx.lineTo(spot.x, spot.y);
       ctx.stroke();
-      ctx.lineWidth = 1.25 * scale;
+      // Floored at 1.5 device pixels. Below that a leader renders as a
+      // sub-pixel scratch that gets lost in the wireframe underneath, and a
+      // number with no visible line to its circle is a number attached to
+      // nothing — which is worse than not displacing it at all.
+      ctx.lineWidth = Math.max(1.5, 1.25 * scale);
       ctx.strokeStyle = scanpathColour(c.t, 0.95, 40);
       ctx.beginPath();
       ctx.moveTo(c.x + (dx / length) * c.radius, c.y + (dy / length) * c.radius);
@@ -432,15 +453,15 @@ export function renderScanpath(
     // The same family as the rest of the UI: canvas text in the system stack
     // renders in a visibly different typeface from every label around it.
     //
-    // The halo is a fraction of the glyph rather than a fixed 3px. At the old
-    // sizes a 3px stroke closed most of the counter of a numeral and the white
-    // fill barely survived it, which is how "large white numeral, dark halo"
-    // rendered on screen as a small dark-grey one.
+    // The halo is a fraction of the glyph, capped: it exists to separate a
+    // white numeral from whatever is under it, and past MAX_ORDINAL_HALO_PX it
+    // starts closing the counters instead — which is how "large white numeral,
+    // dark halo" rendered on screen as a small dark-grey one.
     ctx.font = `700 ${spot.fontSize}px ${CANVAS_FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(2 * scale, spot.fontSize * 0.22);
+    ctx.lineWidth = Math.min(spot.fontSize * 0.22, MAX_ORDINAL_HALO_PX * scale);
     ctx.strokeStyle = "rgba(12,18,24,0.75)";
     ctx.strokeText(text, spot.x, spot.y);
     ctx.fillStyle = "#fff";

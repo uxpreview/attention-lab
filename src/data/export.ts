@@ -1,6 +1,12 @@
 import type { Aoi, AoiAggregate, AoiResult } from "../analysis/aoi";
 import type { Fixation } from "../analysis/fixations";
-import { legendFor, OVERLAY_LABELS, type LegendSpec, type OverlayMode } from "../analysis/legend";
+import {
+  legendFor,
+  OVERLAY_LABELS,
+  type LegendScale,
+  type LegendSpec,
+  type OverlayMode,
+} from "../analysis/legend";
 import { isLowSignal } from "../analysis/quality";
 import { CANVAS_FONT_FAMILY } from "../analysis/scanpath";
 import type { Recording, Study } from "./types";
@@ -196,6 +202,13 @@ export interface OverlayExportContext {
    */
   aois: Aoi[];
   showAois: boolean;
+  /**
+   * What the hot end of the colour scale was worth on screen, when the overlay
+   * has a unit. The exported caption carries the same numbered axis the results
+   * screen shows — a figure pasted into a deck is the one place the reader
+   * cannot ask what dark red means.
+   */
+  scale?: LegendScale | null;
 }
 
 /**
@@ -222,7 +235,11 @@ export async function exportOverlayPng(
   // stimulus is a 900px wireframe or a 3000px retina screenshot.
   const unit = Math.max(11, Math.min(22, width / 62));
   const pad = unit * 1.6;
-  const captionHeight = Math.round(unit * 11.5);
+  // One line taller than it was, for the numbered axis under the scale strip.
+  // The note below it is capped at MAX_NOTE_LINES and would otherwise be the
+  // thing that got squeezed — and the note is the caveat that stops the figure
+  // being cited wrongly.
+  const captionHeight = Math.round(unit * 12.6);
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -269,7 +286,7 @@ function drawCaption(
   box: CaptionBox
 ): void {
   const { unit, pad } = box;
-  const spec = legendFor(context.mode, context.participants);
+  const spec = legendFor(context.mode, context.participants, context.scale ?? null);
 
   ctx.fillStyle = CAPTION_BG;
   ctx.fillRect(box.x, box.y, box.width, box.height);
@@ -359,7 +376,23 @@ function drawLegend(
     ctx.lineWidth = 1;
     ctx.strokeRect(box.x, y, box.width, stripHeight);
 
-    y += stripHeight + unit * 1.05;
+    y += stripHeight;
+
+    // The numbered axis, when the overlay has a unit — the same ticks the
+    // results screen draws under the same strip. Ends are pulled inside the
+    // strip; anything in between is centred on the fraction it names.
+    if (spec.ticks) {
+      y += unit * 0.95;
+      ctx.fillStyle = CAPTION_MUTED;
+      ctx.font = `500 ${unit * 0.78}px ${CANVAS_FONT_FAMILY}`;
+      for (const tick of spec.ticks) {
+        ctx.textAlign = tick.at <= 0 ? "left" : tick.at >= 1 ? "right" : "center";
+        ctx.fillText(tick.label, box.x + box.width * tick.at, y);
+      }
+      ctx.textAlign = "left";
+    }
+
+    y += unit * 1.05;
     ctx.fillStyle = CAPTION_MUTED;
     ctx.font = `400 ${unit * 0.8}px ${CANVAS_FONT_FAMILY}`;
     ctx.fillText(spec.minLabel, box.x, y);

@@ -1,7 +1,12 @@
 import { aggregateAois, analyseAois, type Aoi, type AoiResult } from "../analysis/aoi";
 import { detectFixations, summarise, type Fixation } from "../analysis/fixations";
 import { renderHeatmap, type HeatPoint } from "../analysis/heatmap";
-import { OVERLAY_LABELS, participantColour, type OverlayMode } from "../analysis/legend";
+import {
+  OVERLAY_LABELS,
+  participantColour,
+  type LegendScale,
+  type OverlayMode,
+} from "../analysis/legend";
 import {
   ERROR_BAD_DEG,
   gradeError,
@@ -98,6 +103,12 @@ export async function renderResults(
   // included — unless every recording is flagged, in which case excluding them
   // all would leave an empty stage with no explanation.
   let includeLowSignal = false;
+  /** What the hot end of the heat ramp was worth on the last draw, for the
+   * legend and the PNG caption to print. Only the renderer knows it — the
+   * ceiling is a percentile of this selection's own blob peaks — so it is
+   * captured on the way out of the draw rather than recomputed. Null for the
+   * overlays that have no unit. */
+  let heatScale: LegendScale | null = null;
   const flaggedRecordings = (): Recording[] => recordings.filter((r) => isLowSignal(r.quality));
   /** True only when there is something to exclude *and* something left after
    * excluding it. Recomputed rather than captured, because deleting the one
@@ -195,6 +206,68 @@ export async function renderResults(
   }
   figure.append(overlay, aoiLayer);
   stage.append(figure);
+
+  /**
+   * The stage, full screen, for the width where it stops working.
+   *
+   * At 390px the results screen degrades well in every respect except the one
+   * that matters: the stimulus renders around 250px wide, at which point the
+   * heat blobs are smudges and the numbered region badges overlap each other —
+   * while the AOI table under it stays perfectly readable. So the numbers
+   * survive a phone and the picture does not, and reading results on a phone
+   * between meetings is a real and likely use.
+   *
+   * The *same* figure element is moved into the dialog and back out again,
+   * rather than a copy of it being rendered there. The overlay canvas, the
+   * region layer and their registration to the stimulus are all properties of
+   * this element (see .results-figure in styles.css), so moving it means there
+   * is no second render path that can disagree with the first — and no chance
+   * of a full-screen figure whose boxes sit somewhere else, which is exactly
+   * the failure the print stylesheet used to have.
+   */
+  const lightboxBody = el("div", { class: "lightbox-body" });
+  const lightbox = el(
+    "dialog",
+    { class: "figure-lightbox", "aria-label": `${study.name}, full screen` },
+    lightboxBody,
+    el(
+      "div",
+      { class: "lightbox-bar" },
+      // A wireframe is wider than it is tall and a phone is not; there is no
+      // honest way to fix that in CSS without rotating the figure, which would
+      // put every pointer coordinate in the region layer out of register with
+      // the picture. Saying so costs one line.
+      el("p", { class: "lightbox-hint" }, "Rotate for a wider view"),
+      el(
+        "button",
+        { class: "btn btn-small", type: "button", onclick: () => lightbox.close() },
+        "Close"
+      )
+    )
+  );
+  const zoomButton = el(
+    "button",
+    {
+      class: "btn btn-small stage-zoom",
+      type: "button",
+      onclick: () => {
+        lightboxBody.append(figure);
+        lightbox.showModal();
+        // The figure's box has just changed by a factor of four; the canvas
+        // backing store has to follow it or the overlay is an upscaled blur.
+        void draw();
+      },
+    },
+    "Expand"
+  );
+  // Both are absolutely positioned or in the top layer, so neither takes part
+  // in the stage's centring of the figure. The `close` event covers Esc and the
+  // backdrop as well as the button.
+  lightbox.addEventListener("close", () => {
+    stage.append(figure);
+    void draw();
+  });
+  stage.append(zoomButton, lightbox);
 
   const legend = el("figure", { class: "legend-slot" });
   // Regions and recordings live under the stage, at the width of the stage.
@@ -390,6 +463,8 @@ export async function renderResults(
 
     const set = activeSet();
 
+    heatScale = null;
+
     if (mode === "scanpath") {
       // A combined scanpath across participants would be meaningless, so show
       // the first selected participant's path and say so.
@@ -407,7 +482,11 @@ export async function renderResults(
       for (const a of set) {
         for (const f of a.fixations) points.push({ x: f.x, y: f.y, weight: f.duration });
       }
-      renderHeatmap(overlay, points, { style: mode, radiusRatio: 0.055 });
+      const ceiling = renderHeatmap(overlay, points, { style: mode, radiusRatio: 0.055 });
+      // Spotlight is a mask: the same field drives it, but what it encodes is
+      // "revealed or not", so a millisecond axis under it would name a quantity
+      // the picture does not carry.
+      if (mode !== "spotlight" && ceiling > 0) heatScale = { ceiling };
     }
 
     // Spotlight dims the stage to near-black, which a deep-teal region box and
@@ -422,7 +501,9 @@ export async function renderResults(
     const keyed = mode === "scanpath" ? set.slice(0, 1) : set;
     clear(legend);
     if (hasRecordings) {
-      legend.append(legendElement(mode, keyed.map((a) => a.recording.participant)));
+      legend.append(
+        legendElement(mode, keyed.map((a) => a.recording.participant), heatScale)
+      );
     }
 
     renderAoiBoxes(aoiLayer, aois);
@@ -647,7 +728,11 @@ export async function renderResults(
     const participantSelect = el(
       "select",
       {
-        class: "input",
+        // .select is .input plus `appearance: none` and a drawn chevron: this
+        // was the one control in the app the browser, rather than this design
+        // system, decided the look of — an OS dropdown sitting directly under a
+        // set of hand-built pills.
+        class: "input select",
         id: "participant-filter",
         "data-key": "participants",
         onchange: (event: Event) => {
@@ -1106,6 +1191,9 @@ export async function renderResults(
             : (keyed[0]?.recording.participant ?? "All participants"),
         aois,
         showAois,
+        // The exported caption gets the same numbered axis the screen has, so
+        // a figure in a deck can be read without the app open beside it.
+        scale: heatScale,
       });
     }),
     exportItem("Fixations CSV", "export-fixations", () =>

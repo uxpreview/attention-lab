@@ -168,12 +168,26 @@ export async function runRecording(
   // the stimulus under the cached rect and silently corrupts every sample
   // after it, so those events re-measure: one layout read per event.
   let rect = stimulusEl.getBoundingClientRect();
+  /** The measured rect, published to CSS.
+   *
+   * The progress track used to span the whole stage: with a 1400×900 stimulus
+   * letterboxed into a 1440×900 window it ran 95px past the picture on both
+   * sides and its fill started hard against the stage's bottom-left corner,
+   * attached to nothing. It underlines the stimulus, so it is as wide as the
+   * stimulus — and off the same rect every gaze sample is normalised against,
+   * rather than a second measurement that could disagree with it. */
+  const publishRect = (): void => {
+    stage.style.setProperty("--stim-left", `${rect.left}px`);
+    stage.style.setProperty("--stim-width", `${rect.width}px`);
+  };
+  publishRect();
   const remeasure = () => {
     // The band is a function of the stage height, so a resize has to move it
     // before the rect is read back — otherwise a window made taller mid-session
     // leaves the strip inside the tolerance zone of the new, taller stimulus.
     applyControlBand();
     rect = stimulusEl.getBoundingClientRect();
+    publishRect();
   };
   window.addEventListener("resize", remeasure);
   // Capture phase, because scroll events do not bubble from inner containers.
@@ -215,7 +229,14 @@ export async function runRecording(
   });
 
   const durationMs = study.duration > 0 ? study.duration * 1000 : 0;
-  const stopped = await waitForStop(progressBar, durationMs, chrome, engine, participant);
+  const stopped = await waitForStop(
+    progressBar,
+    durationMs,
+    chrome,
+    engine,
+    participant,
+    stimulusLayer
+  );
   offGaze();
   window.removeEventListener("resize", remeasure);
   window.removeEventListener("scroll", remeasure, true);
@@ -307,7 +328,11 @@ function waitForStop(
   durationMs: number,
   chrome: HTMLElement,
   engine: GazeEngine,
-  participant: string
+  participant: string,
+  /** The letterbox the stimulus is drawn in, so the face-lost warning can put a
+   * cue inside the participant's field of view rather than only in the
+   * moderator's strip at the foot of the screen. */
+  stimulusLayer: HTMLElement
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const start = performance.now();
@@ -366,12 +391,22 @@ function waitForStop(
 
     // The one in-recording quality signal: gaze quietly stops arriving when
     // the face is lost, and the operator should not discover that afterwards.
+    //
+    // It is signalled twice, because the two people in the room are looking at
+    // different things. The chip in the strip is the moderator's readout. The
+    // ring on the stimulus is the participant's: the strip is ~830px below
+    // where they are actually looking, and calibration already solves the same
+    // condition this way — the dot's ring changes colour inside their foveal
+    // field *and* the status line appears. Nothing else is allowed inside the
+    // measured rect, but while the face is lost the tracker emits no samples,
+    // so there is no measurement for the ring to contaminate.
     let faceLost = false;
     const offStatus = engine.onStatus((status) => {
       const lost = !status.faceVisible;
       if (lost === faceLost) return;
       faceLost = lost;
       hint.classList.toggle("is-lost", lost);
+      stimulusLayer.classList.toggle("is-lost", lost);
       hint.textContent = lost ? "Face lost — check lighting and framing" : baseHint;
     });
 
@@ -402,6 +437,9 @@ function waitForStop(
       window.clearInterval(clockTimer);
       offStatus();
       window.removeEventListener("keydown", onKey);
+      // The ring outlives the listener that raised it otherwise, and a
+      // discarded-then-retried session would open already flagged.
+      stimulusLayer.classList.remove("is-lost");
       controls.remove();
       resolve(completed);
     };
