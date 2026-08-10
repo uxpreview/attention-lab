@@ -129,7 +129,20 @@ export async function runCalibration(
   // The counter lives outside the instruction block: the instructions dim
   // after the first dot, and progress is the one thing that has to stay
   // visible for all eighteen clicks — it is what buys participant patience.
+  //
+  // It used to be the quietest thing on the screen it was carrying: 14px in a
+  // low-contrast grey-teal, centred at the foot of the window — 42px from where
+  // the y=0.92 dot row lands, so through the bottom third of the sequence the
+  // counter sat inside the halo of the dot the participant was aiming at. And a
+  // bare fraction is not progress for an eighteen-step sequence that changes
+  // its own denominator halfway through: "Calibration 1 / 13" says nothing
+  // about the five dots that follow it. So: a determinate bar across both
+  // phases, a louder counter, a line naming what comes next, and a corner
+  // anchor that steps out of the dot's way (see keepStatusClear).
   const progress = el("p", { class: "calib-progress", role: "status" });
+  const progressFill = el("div", { class: "calib-bar-fill" });
+  const progressTrack = el("div", { class: "calib-bar", "aria-hidden": "true" }, progressFill);
+  const phaseNote = el("p", { class: "calib-phase" });
   /**
    * The one condition that invalidates the whole sequence, said while it is
    * still recoverable.
@@ -161,15 +174,29 @@ export async function runCalibration(
     () => cancel(),
     "btn btn-ghost btn-small calib-cancel"
   );
-  // One line at the foot of the screen: the counter, and beside it the reason
-  // the counter has stopped meaning anything.
-  overlay.append(
-    instruction,
-    el("div", { class: "calib-status" }, progress, lostHint),
-    dot,
-    cancelBtn
+  // One block in a corner: where you are, how far that is through the whole
+  // sequence, what follows, and the reason the counter has stopped meaning
+  // anything.
+  const status = el(
+    "div",
+    { class: "calib-status" },
+    progress,
+    progressTrack,
+    phaseNote,
+    lostHint
   );
+  overlay.append(instruction, status, dot, cancelBtn);
   host.append(overlay);
+
+  /** Every dot the participant is asked to click, both phases together. The
+   * bar spans this rather than restarting at the accuracy check, because what a
+   * participant wants to know is how much of *this* is left. */
+  const TOTAL_POINTS = CALIBRATION_POINTS.length + VALIDATION_POINTS.length;
+  const setProgress = (done: number, label: string, phase: string): void => {
+    progress.textContent = label;
+    phaseNote.textContent = phase;
+    progressFill.style.width = `${Math.min(100, (done / TOTAL_POINTS) * 100)}%`;
+  };
 
   const restoreBackground = inertSiblings(host, overlay);
   overlay.focus();
@@ -207,9 +234,16 @@ export async function runCalibration(
       if (cancelled) break;
       const [nx, ny] = CALIBRATION_POINTS[i];
       // Phase-labelled, because an unlabelled counter restarting at "1 / 5"
-      // after thirteen dots reads as the whole thing starting over.
-      progress.textContent = `Calibration ${i + 1} / ${CALIBRATION_POINTS.length}`;
+      // after thirteen dots reads as the whole thing starting over — and the
+      // phase line says at dot 1 that a second phase is coming, rather than
+      // springing it after thirteen clicks.
+      setProgress(
+        i + 1,
+        `Calibration ${i + 1} / ${CALIBRATION_POINTS.length}`,
+        `Then a ${VALIDATION_POINTS.length}-dot accuracy check`
+      );
       keepCancelClear(cancelBtn, nx, ny);
+      keepStatusClear(status, nx, ny);
       let collected: CollectResult;
       do {
         collected = await collectAtPoint(engine, dot, nx, ny, samples, abort.signal);
@@ -227,7 +261,7 @@ export async function runCalibration(
 
     if (cancelled) return { cancelled: true, validationError: null };
 
-    progress.textContent = "Fitting model…";
+    setProgress(CALIBRATION_POINTS.length, "Fitting model…", "One moment");
     engine.calibrate(samples);
 
     instruction.classList.remove("is-dim");
@@ -239,8 +273,13 @@ export async function runCalibration(
     for (let i = 0; i < VALIDATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = VALIDATION_POINTS[i];
-      progress.textContent = `Accuracy check ${i + 1} / ${VALIDATION_POINTS.length}`;
+      setProgress(
+        CALIBRATION_POINTS.length + i + 1,
+        `Accuracy check ${i + 1} / ${VALIDATION_POINTS.length}`,
+        "The last of it"
+      );
       keepCancelClear(cancelBtn, nx, ny);
+      keepStatusClear(status, nx, ny);
       let error: number | "retry" | null;
       do {
         error = await measureAtPoint(engine, dot, nx, ny, abort.signal);
@@ -290,6 +329,41 @@ function keepCancelClear(cancelBtn: HTMLElement, nx: number, ny: number): void {
   const dy = Math.max(rect.top - y, 0, y - rect.bottom);
   cancelBtn.classList.toggle("is-away", Math.hypot(dx, dy) < CANCEL_CLEARANCE);
 }
+
+/**
+ * Gets the progress block out of the way of the dot, without ever hiding it.
+ *
+ * Cancel can simply vanish when a dot comes near it; the counter cannot — it is
+ * what buys eighteen clicks of patience. So it has two anchors instead: bottom
+ * right by default, top right when a dot lands near the bottom right. At most
+ * one of the two can be contested at a time, because the flip is only triggered
+ * by a dot that is itself in the bottom corner.
+ *
+ * The clearance is measured against the *default* anchor's box rather than the
+ * element's current one. Measuring where it happens to be would make the
+ * decision depend on the previous decision: flipped to the top and then asked
+ * about a bottom-right dot, it would read "far away", drop back down, and land
+ * on the dot it was avoiding.
+ */
+function keepStatusClear(status: HTMLElement, nx: number, ny: number): void {
+  const x = nx * window.innerWidth;
+  const y = ny * window.innerHeight;
+  const box = status.getBoundingClientRect();
+  // Mirrors .calib-status's inset in styles.css.
+  const inset = 18;
+  const right = window.innerWidth - inset;
+  const bottom = window.innerHeight - inset;
+  const left = right - box.width;
+  const top = bottom - box.height;
+  const dx = Math.max(left - x, 0, x - right);
+  const dy = Math.max(top - y, 0, y - bottom);
+  status.classList.toggle("is-flipped", Math.hypot(dx, dy) < STATUS_CLEARANCE);
+}
+
+/** Clearance kept between a dot and the progress block, in pixels. Larger than
+ * the Cancel button's, because this block is wider and taller than that pill
+ * and a participant aiming at a corner dot should not have text under it. */
+const STATUS_CLEARANCE = 150;
 
 function placeDot(dot: HTMLElement, nx: number, ny: number): { x: number; y: number } {
   const x = nx * window.innerWidth;

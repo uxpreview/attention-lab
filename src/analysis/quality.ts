@@ -67,7 +67,13 @@ export function isLowSignal(quality: RecordingQuality): boolean {
   return gradeRecording(quality) === "bad";
 }
 
-/** Why a recording was flagged, for the badge's tooltip. */
+/** Why a recording was flagged, said in full.
+ *
+ * This is printed as a visible line under the flagged participant's name in the
+ * Recordings list, not only as a tooltip: the reason a session was dropped from
+ * an aggregate is a fact an author has to defend, and a hover hint is
+ * unreachable on touch and silent to a keyboard. Lower-case and unpunctuated,
+ * so the caller can lead with it or fold it into a longer sentence. */
 export function lowSignalReason(quality: RecordingQuality): string {
   const reasons: string[] = [];
   if (gradeTracking(quality.trackingRatio) === "bad") {

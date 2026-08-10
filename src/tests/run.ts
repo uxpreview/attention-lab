@@ -33,7 +33,11 @@ import {
   controlBandHeight,
   CONTROL_STRIP_PX,
   EDGE_TOLERANCE,
+  FIT_SCALE_FLOOR,
+  fitStimulus,
+  isInsideViewport,
 } from "../ui/record";
+import { formatOnset, SAMPLE_PERIOD_MS } from "../ui/dom";
 import type { RecordingQuality } from "../data/types";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { MedianPoint, OneEuroPoint } from "../tracker/filter";
@@ -809,6 +813,91 @@ section("Recording chrome stays out of the measured rect");
   );
 }
 
+section("Showing a stimulus at a size the participant can read");
+{
+  // A 1280x1600 full-page screenshot letterboxed into a 1440x804 stage rendered
+  // 643px wide: every label at half its designed size, on the screen the
+  // finding is made on. That does not merely look bad — the task asks someone
+  // to find a control on text they cannot read, so the study is invalid.
+  const stage = { width: 1440, height: 804 };
+  const fullPage = fitStimulus({ width: 1280, height: 1600 }, stage);
+  check("a tall screenshot is shown at full width, not contained", fullPage.mode === "width");
+  check(
+    "and at full width it is near its designed size",
+    fullPage.scale > FIT_SCALE_FLOOR,
+    `${(fullPage.scale * 100).toFixed(0)}%`
+  );
+
+  // The common case must not change: a wireframe that already fits stays
+  // letterboxed, because seeing the whole screen at once is the point.
+  const wireframe = fitStimulus({ width: 1400, height: 760 }, stage);
+  check("a stimulus that fits comfortably stays contained", wireframe.mode === "contain");
+  const slightlyTall = fitStimulus({ width: 1280, height: 820 }, stage);
+  check(
+    "a marginally tall stimulus stays contained rather than scrolling",
+    slightlyTall.mode === "contain",
+    `${(slightlyTall.scale * 100).toFixed(0)}%`
+  );
+  // Scrolling buys nothing when the width is already the binding constraint: a
+  // wide stimulus is the same size either way, and the scrollbar would be the
+  // only difference.
+  const wide = fitStimulus({ width: 4000, height: 1000 }, stage);
+  check("a too-wide stimulus is contained, since scrolling would not help", wide.mode === "contain");
+  check("a degenerate size does not divide by zero", fitStimulus({ width: 0, height: 0 }, stage).scale === 1);
+
+  // The scrolling fit breaks the invariant controlBandHeight guarantees: a
+  // stimulus taller than its window has a rect that runs past the window on
+  // both ends, so the moderator's strip is inside the rect by construction and
+  // "inside the rect" stops implying "on screen". The window check is what
+  // replaces it.
+  const band = controlBandHeight(900);
+  const windowBox = { left: 0, top: 0, width: 1440, height: 900 - band };
+  const stripY = 900 - CONTROL_STRIP_PX;
+  check(
+    "gaze on the control strip is dropped in the scrolling fit",
+    !isInsideViewport({ x: 720, y: stripY }, windowBox),
+    `strip at y=${stripY}, window ends at ${windowBox.height}`
+  );
+  check(
+    "gaze anywhere below the window is dropped, not clamped",
+    !isInsideViewport({ x: 720, y: windowBox.height + 2 }, windowBox)
+  );
+  check(
+    "gaze on the last visible row of the stimulus is kept",
+    isInsideViewport({ x: 720, y: windowBox.height - 1 }, windowBox)
+  );
+  // Edge tolerance survives where the window edge is a real stimulus edge.
+  check(
+    "gaze just past the left edge is still kept",
+    isInsideViewport({ x: -20, y: 300 }, windowBox)
+  );
+  check(
+    "gaze well off the left edge is dropped",
+    !isInsideViewport({ x: -400, y: 300 }, windowBox)
+  );
+}
+
+section("Sub-sample latencies do not print as zero");
+{
+  // "Time to first region: 0ms" rendered as a headline stat and as a table
+  // cell. Capture begins with the participant already looking at the screen, so
+  // anyone already on a region produces a value below one sample interval, and
+  // a bare "0ms" reads as a broken counter rather than a measurement.
+  const instant = formatOnset(0);
+  check("an onset of zero does not print as 0ms", instant.label === `<${SAMPLE_PERIOD_MS}ms`, instant.label);
+  check("and it says why", instant.note !== null && /already fixating/i.test(instant.note));
+  check(
+    "anything under one sample takes the same floor",
+    formatOnset(SAMPLE_PERIOD_MS - 1).label === `<${SAMPLE_PERIOD_MS}ms`
+  );
+  // Above the floor it is an ordinary measurement again, in the units the rail
+  // beside it uses.
+  check("a real onset prints its value", formatOnset(420).label === "420ms");
+  check("and carries no caveat", formatOnset(420).note === null);
+  check("a slow onset reads in seconds", formatOnset(2400).label === "2.4s");
+  check("an unmeasurable onset is a dash", formatOnset(Number.NaN).label === "—");
+}
+
 // --- AOIs ----------------------------------------------------------------
 
 section("Area of interest analysis");
@@ -1143,6 +1232,19 @@ section("Overlay legends");
 
   const scanpath = legendFor("scanpath", ["P01"]);
   check("the scanpath legend keys time", scanpath.minLabel === "First" && scanpath.maxLabel === "Last");
+
+  // The note is the caveat a reader needs before citing the figure, and it is
+  // 68 words — so it folds into a disclosure and a one-clause caption stays
+  // inline. Every mode has to carry both, or a view loses its key entirely.
+  const modes = ["heat", "contour", "spotlight", "scanpath", "raw"] as const;
+  const captionless = modes.filter((m) => legendFor(m, ["P01"]).caption.trim().length === 0);
+  check("every overlay names itself in one clause", captionless.length === 0, captionless.join(", "));
+  const verbose = modes.filter((m) => legendFor(m, ["P01"]).caption.split(/\s+/).length > 14);
+  check(
+    "and the caption stays a caption rather than becoming the note again",
+    verbose.length === 0,
+    verbose.join(", ")
+  );
 
   const raw = legendFor("raw", ["P01", "P02", "P03"]);
   check("the raw legend keys every participant", raw.swatches?.length === 3);

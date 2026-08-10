@@ -35,6 +35,7 @@ import {
   confirmButton,
   el,
   formatMs,
+  formatOnset,
   formatPercent,
   nextFrame,
   relativeDay,
@@ -168,8 +169,14 @@ export async function renderResults(
    * Floated inside the stage it was a card with a border and no shadow sitting
    * over the middle of a short wireframe — a modal that had lost its backdrop,
    * covering the very stimulus the regions are meant to be drawn on. Below the
-   * stage it reads as what it is: a footer bar belonging to the stage, with the
-   * action in it. */
+   * stage it reads as what it is: a footer bar belonging to the stage.
+   *
+   * The action that used to sit in it has moved into the rail beside it, which
+   * now holds the empty state's "what happens next" (see buildSidebar). The
+   * rail is where the primary control of this screen lives once there are
+   * recordings, so putting it there before there are any is what makes the two
+   * skeletons the same screen — and one Run session button per screen beats
+   * two. */
   let emptyStrip: HTMLElement | null = null;
 
   if (study.stimulus.kind === "image") {
@@ -181,7 +188,7 @@ export async function renderResults(
     figure.style.aspectRatio = `${study.stimulus.width} / ${study.stimulus.height}`;
     figure.append(stimulusImage);
     if (!hasRecordings) {
-      emptyStrip = el("div", { class: "stage-empty" }, el("p", {}, emptyLine), runAction());
+      emptyStrip = el("div", { class: "stage-empty" }, el("p", {}, emptyLine));
     }
   } else {
     // Nothing to shrink-wrap: the figure takes the stage, which is where a URL
@@ -199,13 +206,20 @@ export async function renderResults(
           hasRecordings
             ? "Overlays are drawn against the recorded viewport, not a re-render of the page."
             : `${emptyLine} Overlays are drawn against the recorded viewport, not a re-render of the page.`
-        ),
-        hasRecordings ? null : el("div", { class: "placeholder-actions" }, runAction())
+        )
       )
     );
   }
   figure.append(overlay, aoiLayer);
-  stage.append(figure);
+  /** The scrolling box, so the stage's own controls do not scroll with it.
+   *
+   * Fit-width makes the figure taller than the stage, and an absolutely
+   * positioned control inside a scroll container scrolls with its content — so
+   * with the scroll on the stage itself, the Fit toggle that put the stage into
+   * this state travelled off the top of it and could not be used to leave.
+   * Scrolling one layer in gives the tools a fixed frame to sit in. */
+  const scroller = el("div", { class: "stage-scroll" }, figure);
+  stage.append(scroller);
 
   /**
    * The stage, full screen, for the width where it stops working.
@@ -260,14 +274,80 @@ export async function renderResults(
     },
     "Expand"
   );
+
+  /**
+   * Fit-height or fit-width, because one fixed fit is not enough.
+   *
+   * The figure is capped at 78vh, so a portrait stimulus — a full-page
+   * screenshot, which is most of what gets uploaded — becomes height-bound and
+   * gives its width away: measured at 1440×900, a 976px stage holding a 562px
+   * figure, 42.6% of the primary analysis surface empty ground. Fit-width
+   * releases the height cap, gives the figure the stage's full width and lets
+   * the stage scroll on Y, which is what every annotation tool offers and what
+   * makes a full-page screenshot readable at all. The overlay and the region
+   * layer are inset to the figure in CSS, so both fits are exact — nothing is
+   * measured and cached, and the two modes cannot disagree about where a blob
+   * belongs.
+   */
+  let fitWidth = false;
+  /** Set once the operator picks a fit, so the automatic choice below stops
+   * second-guessing them on the next resize. */
+  let fitChosen = false;
+  const fitButton = el(
+    "button",
+    {
+      class: "btn btn-small stage-fit",
+      type: "button",
+      "aria-pressed": "false",
+      title: "Show the stimulus at the stage's full width and scroll it",
+    },
+    "Fit width"
+  );
+  const setFit = (next: boolean): void => {
+    fitWidth = next;
+    figure.classList.toggle("is-fit-width", next);
+    stage.classList.toggle("is-scrolling", next);
+    fitButton.textContent = next ? "Fit height" : "Fit width";
+    fitButton.title = next
+      ? "Fit the whole stimulus in the stage"
+      : "Show the stimulus at the stage's full width and scroll it";
+    fitButton.setAttribute("aria-pressed", next ? "true" : "false");
+    void draw();
+  };
+  fitButton.addEventListener("click", () => {
+    fitChosen = true;
+    setFit(!fitWidth);
+  });
+
+  /** Picks the fit the stimulus needs, once, before anyone has expressed a
+   * preference. A stimulus that fits the stage within a quarter of its width is
+   * fine contained; below that it is being shown at half its designed size,
+   * which is the state this whole affordance exists for. */
+  let autoFitDone = false;
+  const autoFit = (): void => {
+    if (autoFitDone || fitChosen || !stimulusImage) return;
+    autoFitDone = true;
+    const stageWidth = scroller.clientWidth;
+    const figureWidth = figure.getBoundingClientRect().width;
+    if (stageWidth > 0 && figureWidth / stageWidth < 0.75) setFit(true);
+  };
+
   // Both are absolutely positioned or in the top layer, so neither takes part
   // in the stage's centring of the figure. The `close` event covers Esc and the
   // backdrop as well as the button.
   lightbox.addEventListener("close", () => {
-    stage.append(figure);
+    scroller.append(figure);
     void draw();
   });
-  stage.append(zoomButton, lightbox);
+  // The tools group holds only what applies. A URL study's figure *is* the
+  // stage, so there is nothing to fit — and before its first recording there is
+  // nothing to expand either: the stage is a placeholder printing an address,
+  // and a full-screen view of it promises a picture there is no picture for.
+  const stageTools =
+    stimulusImage || hasRecordings
+      ? el("div", { class: "stage-tools" }, stimulusImage ? fitButton : null, zoomButton)
+      : null;
+  stage.append(...(stageTools ? [stageTools] : []), lightbox);
 
   const legend = el("figure", { class: "legend-slot" });
   // Regions and recordings live under the stage, at the width of the stage.
@@ -344,6 +424,16 @@ export async function renderResults(
       kept === total ? "" : "Low-signal recordings are excluded from the aggregate";
   }
 
+  /**
+   * One export, with what it will actually contain printed under its name.
+   *
+   * The menu was five identical rows, and one of them is a different kind of
+   * file: the four view exports are scoped to whatever the screen is reporting
+   * on, while Session JSON is deliberately the whole archive — low-signal
+   * recordings included. A researcher exporting from a header that reads "4 of
+   * 5 recordings" had no way to know that one of these five files contains
+   * five. The scope is live, repainted every time the menu opens.
+   */
   function exportItem(label: string, key: string, run: () => void): HTMLButtonElement {
     return el(
       "button",
@@ -357,11 +447,41 @@ export async function renderResults(
           run();
         },
       },
-      label
+      el("span", { class: "menu-item-label" }, label),
+      el("span", { class: "menu-item-note" })
     );
   }
 
+  /** The scoped exports' coverage, in the same counting the header pill uses. */
+  function scopeSummary(): string {
+    const total = recordings.length;
+    const plural = total === 1 ? "" : "s";
+    if (selected !== "all") {
+      const one = activeSet()[0]?.recording.participant ?? "—";
+      return `${one} only — 1 of ${total} recording${plural}`;
+    }
+    const kept = aggregateSet().length;
+    return kept === total
+      ? `all ${total} recording${plural}`
+      : `${kept} of ${total} recordings`;
+  }
+
+  function paintExportScopes(): void {
+    const total = recordings.length;
+    const plural = total === 1 ? "" : "s";
+    const scoped = scopeSummary();
+    for (const item of Array.from(exportMenu.querySelectorAll<HTMLElement>(".menu-item"))) {
+      const note = item.querySelector<HTMLElement>(".menu-item-note");
+      if (!note) continue;
+      note.textContent =
+        item.dataset.key === "export-json"
+          ? `archive — all ${total} recording${plural}, low signal included`
+          : scoped;
+    }
+  }
+
   function setExportOpen(open: boolean): void {
+    if (open) paintExportScopes();
     exportMenu.hidden = !open;
     exportToggle.setAttribute("aria-expanded", open ? "true" : "false");
     exportToggle.classList.toggle("is-active", open);
@@ -668,28 +788,61 @@ export async function renderResults(
 
     const found = firsts.length;
     const mean = averageOf(firsts);
+    // Below one gaze sample the honest reading is "sooner than this can be
+    // timed", not "0ms" — see formatOnset. The fix that put a real quantity in
+    // this row changed *what* was measured; it left the formatting floor, so a
+    // participant already on a region at t=0 still produced a headline zero.
+    const onset = mean === null ? null : formatOnset(mean);
+    const scopeNote =
+      mean === null
+        ? "No participant in this selection fixated any region."
+        : `Mean over the ${found} of ${set.length} recording${set.length === 1 ? "" : "s"} whose gaze reached a region.`;
     return [
       statRow(
         "Time to first region",
-        mean === null ? "—" : formatMs(mean),
+        onset === null ? "—" : onset.label,
         undefined,
-        mean === null
-          ? "No participant in this selection fixated any region."
-          : `Mean over the ${found} of ${set.length} recording${set.length === 1 ? "" : "s"} whose gaze reached a region.`
+        onset?.note ? `${onset.note} ${scopeNote}` : scopeNote
       ),
     ];
   }
 
   function buildSidebar(): void {
+    /**
+     * The empty state, in the rail rather than instead of it.
+     *
+     * The rail used to be collapsed away entirely before the first recording,
+     * which cured a 320×517px column of empty cream by producing something
+     * worse: three full-width strips — a 1320×320 stage, a 1320×126 "rail" and
+     * a 1320×104 table — so the screen a first-time visitor meets is a
+     * different skeleton from the one their first recording produces, and the
+     * structure has to be re-learned the moment it lands. The rail is kept and
+     * given something worth its width: what happens next, and the button that
+     * does it. Same two-track grid, same rail, before and after.
+     */
     if (!hasRecordings) {
+      // A URL study has no stimulus to draw on until a session has recorded one
+      // — the same condition aoiSection computes before disabling "+ Draw". A
+      // visibility switch over a layer the app simultaneously forbids you to
+      // put anything into is the control that lies, one level up.
+      const noStimulusYet = study.stimulus.kind === "url";
       sidebar.append(
-        el("h3", {}, "View"),
+        el("h3", {}, "What happens next"),
         el(
-          "p",
-          { class: "muted" },
-          "Heatmap, spotlight, contour and scanpath views arrive with the first recording. Regions drawn now apply to every session run afterwards."
+          "ol",
+          { class: "next-steps" },
+          el("li", {}, "Run a session: calibrate, show the task, record the pass."),
+          el(
+            "li",
+            {},
+            noStimulusYet
+              ? "Draw regions afterwards — on a live page they are anchored to the recorded viewport."
+              : "Draw regions on the stimulus. Regions drawn now apply to every session run afterwards."
+          ),
+          el("li", {}, "Heatmap, spotlight, contour and scanpath views arrive with the first recording.")
         ),
-        regionToggle()
+        runAction(),
+        ...(noStimulusYet ? [] : [regionToggle()])
       );
       return;
     }
@@ -1012,15 +1165,7 @@ export async function renderResults(
               hasRecordings
                 ? el("td", { class: "cell-measure", "data-label": "Dwell" }, formatMs(agg.meanDwell))
                 : null,
-              hasRecordings
-                ? el(
-                    "td",
-                    { class: "cell-measure", "data-label": "TTFF" },
-                    agg.meanTimeToFirstFixation === null
-                      ? "—"
-                      : formatMs(agg.meanTimeToFirstFixation)
-                  )
-                : null,
+              hasRecordings ? ttffCell(agg.meanTimeToFirstFixation) : null,
               el("td", { class: "cell-action" }, aoiDeleteButton(agg.aoiId, agg.label))
             )
           )
@@ -1028,6 +1173,19 @@ export async function renderResults(
       )
     );
     return section;
+  }
+
+  /** One region's time to first fixation, with the same sub-sample floor the
+   * summary row uses. A table that prints "0ms" beside a graded dwell figure is
+   * reporting a broken counter, not a measurement. */
+  function ttffCell(ms: number | null): HTMLElement {
+    if (ms === null) return el("td", { class: "cell-measure", "data-label": "TTFF" }, "—");
+    const onset = formatOnset(ms);
+    return el(
+      "td",
+      { class: "cell-measure", "data-label": "TTFF", title: onset.note },
+      onset.label
+    );
   }
 
   function recordingsSection(): HTMLElement {
@@ -1056,14 +1214,27 @@ export async function renderResults(
                 low
                   ? el(
                       "span",
-                      {
-                        class: "quality-badge",
-                        title: `Low signal: ${lowSignalReason(a.recording.quality)}.${excluded ? " Excluded from the aggregate." : ""}`,
-                      },
+                      { class: "quality-badge" },
                       excluded ? "Low signal · excluded" : "Low signal"
                     )
                   : null
               ),
+              // Why this participant's data was dropped, on the screen.
+              //
+              // It lived only in a `title` on a non-interactive span:
+              // unreachable on touch, never announced to a keyboard user who
+              // has no reason to focus a span, and absent from any screenshot
+              // of the finding. The reason a recording was excluded from an
+              // aggregate is something an author has to defend in a write-up,
+              // not a hover hint — so it is a line of its own under the name,
+              // in the same --signal-bad the row's left edge already wears.
+              low
+                ? el(
+                    "p",
+                    { class: "recording-reason" },
+                    `${capitalise(lowSignalReason(a.recording.quality))}.${excluded ? " Excluded from the aggregate." : ""}`
+                  )
+                : null,
               // Only the tracked percentage is a judgement. A fixation count is
               // a neutral descriptor, and painting it success-green spent the
               // palette's one "this is fine" signal on it five rows running —
@@ -1107,11 +1278,20 @@ export async function renderResults(
    * session mid-capture — is a labelled confirm. This one is now too.
    */
   function aoiDeleteButton(aoiId: string, label: string): HTMLButtonElement {
-    const btn = confirmButton("Remove", "Really remove?", () => {
+    // Armed, not resting, is when the verb appears.
+    //
+    // Six regions meant six 126px cells all reading "Remove", beside the
+    // Recordings card's five "Delete"s: eleven destructive verbs on one screen,
+    // out-shouting the Seen/Dwell/TTFF numbers the table exists to report. The
+    // control is a × at rest and says the word only once it is armed — the
+    // aria-label carries the full verb throughout, so nothing is lost to a
+    // screen reader, and confirmButton still stacks both labels in one cell so
+    // arming cannot reflow the row.
+    const btn = confirmButton("✕", "Remove?", () => {
       const index = aois.findIndex((a) => a.id === aoiId);
       if (index >= 0) aois.splice(index, 1);
       onAoiChange();
-    });
+    }, "btn btn-ghost btn-small confirm-icon");
     btn.setAttribute("aria-label", `Remove region ${label}`);
     btn.dataset.key = `aoi-remove-${aoiId}`;
     return btn;
@@ -1222,13 +1402,17 @@ export async function renderResults(
       )
     ),
     // The one export that is an archive rather than a view of the screen, so it
-    // stays whole: every recording, low-signal ones included and graded.
+    // stays whole: every recording, low-signal ones included and graded. The
+    // rule divides it from the four above it, because "different promise" is
+    // not something five identical rows can say.
+    el("div", { class: "menu-sep", role: "separator" }),
     exportItem("Session JSON", "export-json", () => exportStudyJson(study, recordings))
   );
 
   renderSidebar();
   renderData();
   await draw();
+  autoFit();
 
   // Live resizes fire many events per second, and each full redraw re-splats
   // the entire heatmap. A trailing-edge debounce redraws once when the drag
@@ -1272,6 +1456,11 @@ function statRow(
  * sample, so the last one is the length of the pass over the screen. */
 function recordingLength(recording: Recording): number {
   return recording.points.length > 0 ? recording.points[recording.points.length - 1].t : 0;
+}
+
+/** Leads a sentence with a fragment written to be usable mid-sentence too. */
+function capitalise(text: string): string {
+  return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1);
 }
 
 function averageOf(values: number[]): number | null {

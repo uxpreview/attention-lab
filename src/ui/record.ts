@@ -85,12 +85,89 @@ export function controlBandHeight(stageHeight: number): number {
  * into the stimulus rect — the property the band exists to make impossible.
  * Exported for the test suite, which asserts it is false at every plausible
  * stage size.
+ *
+ * This covers the contained fit, where the stimulus is letterboxed above the
+ * band and its rect therefore ends where the band begins. The scrolling fit
+ * (see {@link fitStimulus}) breaks that assumption — a stimulus taller than its
+ * viewport has a rect that runs off both ends of the screen, so the band is
+ * inside it by construction — and is guarded in screen space instead, by
+ * {@link isInsideViewport}.
  */
 export function chromeCanContaminate(stageHeight: number): boolean {
   const stimulusHeight = stageHeight - controlBandHeight(stageHeight);
   if (stimulusHeight <= 0) return true;
   const topOfControls = stageHeight - CONTROL_STRIP_PX;
   return topOfControls / stimulusHeight <= 1 + EDGE_TOLERANCE;
+}
+
+/**
+ * The smallest scale at which a stimulus is still worth showing contained.
+ *
+ * Below this a 1280px-wide wireframe is being rendered at well under its
+ * designed size and its labels stop being readable — which does not merely look
+ * bad, it invalidates the study: the task asks someone to find a control on
+ * text they cannot read, and the heatmap that comes back is a picture of them
+ * squinting. 0.85 is where a 13px label lands around 11px, the floor at which
+ * UI copy is still scanned rather than deciphered.
+ */
+export const FIT_SCALE_FLOOR = 0.85;
+
+/**
+ * How a stimulus of this size should be shown in a viewport of that size.
+ *
+ * "contain" is the letterbox that has always been used: the whole stimulus at
+ * once, which is right whenever it survives at a readable scale. "width" gives
+ * the stimulus the full width of the viewport and lets it scroll vertically —
+ * the way every full-page screenshot is read — and is chosen only when
+ * containing it would fall below {@link FIT_SCALE_FLOOR} *and* fitting the
+ * width does measurably better. Where the width is already the binding
+ * constraint — anything wider than it is tall relative to the stage — scrolling
+ * buys nothing, so it stays contained.
+ *
+ * Pure, and exported, because it is the one rule deciding what a participant
+ * sees, and the setup form quotes it back to the operator before they spend a
+ * participant on an unreadable screen.
+ */
+export function fitStimulus(
+  stimulus: { width: number; height: number },
+  viewport: { width: number; height: number }
+): { mode: "contain" | "width"; scale: number } {
+  if (stimulus.width <= 0 || stimulus.height <= 0) return { mode: "contain", scale: 1 };
+  const contain = Math.min(viewport.width / stimulus.width, viewport.height / stimulus.height);
+  const byWidth = viewport.width / stimulus.width;
+  if (contain >= FIT_SCALE_FLOOR || byWidth <= contain) return { mode: "contain", scale: contain };
+  // Never past 1:1. A 1280px stimulus in a 1440px window is shown at its native
+  // size and centred, not stretched to fill — upscaling a screenshot softens
+  // exactly the labels this mode exists to make readable.
+  return { mode: "width", scale: Math.min(1, byWidth) };
+}
+
+/**
+ * True when a gaze sample is over the part of the stimulus the participant can
+ * actually see.
+ *
+ * In the contained fit this is implied — the stimulus is the visible rect — and
+ * the normalised range check does the whole job. In the scrolling fit it is
+ * not: the stimulus rect extends past the top and bottom of its viewport, and
+ * the moderator's control strip sits below that viewport, inside the rect. A
+ * glance at Finish would normalise to a perfectly plausible point three
+ * quarters of the way down the page. So the sample is required to be in the
+ * viewport box first, with the same edge tolerance applied on the axes where
+ * the stimulus edge and the viewport edge coincide — never below the foot,
+ * which is where the chrome is.
+ */
+export function isInsideViewport(
+  sample: { x: number; y: number },
+  viewport: { left: number; top: number; width: number; height: number }
+): boolean {
+  const padX = viewport.width * EDGE_TOLERANCE;
+  const padY = viewport.height * EDGE_TOLERANCE;
+  return (
+    sample.x >= viewport.left - padX &&
+    sample.x <= viewport.left + viewport.width + padX &&
+    sample.y >= viewport.top - padY &&
+    sample.y <= viewport.top + viewport.height
+  );
 }
 
 export async function runRecording(
@@ -162,12 +239,45 @@ export async function runRecording(
     return { status: "cancelled" };
   }
 
+  /**
+   * Fit the stimulus so the participant can read it.
+   *
+   * `object-fit: contain` with no width-fit path meant a 1280×1600 full-page
+   * screenshot rendered 643px wide in a 1440px stage — half its designed size,
+   * 55% of the participant's screen empty teal, and a task prompt asking them
+   * to find a control on labels they cannot read. That does not merely look
+   * bad: it is the screen the finding is made on, so it invalidates the study.
+   * Below the readable floor the stimulus takes the full width and scrolls,
+   * which is how a full-page screenshot is read everywhere else.
+   *
+   * The choice is re-made on resize, because the window can change shape
+   * mid-session and the fit is a function of the box.
+   */
+  let scrolling = false;
+  const applyFit = (): void => {
+    if (study.stimulus.kind !== "image") return;
+    const box = stimulusLayer.getBoundingClientRect();
+    const fit = fitStimulus(
+      { width: study.stimulus.width, height: study.stimulus.height },
+      { width: box.width, height: box.height }
+    );
+    scrolling = fit.mode === "width";
+    stimulusLayer.classList.toggle("is-scroll", scrolling);
+    stimulusEl.classList.toggle("is-fit-width", scrolling);
+  };
+  applyFit();
+
   await nextFrame();
   // Cached rather than measured per sample — one layout read per recording,
   // not thirty per second. But a resize, zoom, or scroll mid-recording moves
   // the stimulus under the cached rect and silently corrupts every sample
   // after it, so those events re-measure: one layout read per event.
   let rect = stimulusEl.getBoundingClientRect();
+  /** The window onto the stimulus. Identical to `rect` in the contained fit;
+   * in the scrolling fit it is the part of a taller stimulus that is on screen,
+   * and it is what keeps the moderator's controls out of the measurement — see
+   * isInsideViewport. */
+  let viewport = stimulusLayer.getBoundingClientRect();
   /** The measured rect, published to CSS.
    *
    * The progress track used to span the whole stage: with a 1400×900 stimulus
@@ -186,7 +296,9 @@ export async function runRecording(
     // before the rect is read back — otherwise a window made taller mid-session
     // leaves the strip inside the tolerance zone of the new, taller stimulus.
     applyControlBand();
+    applyFit();
     rect = stimulusEl.getBoundingClientRect();
+    viewport = stimulusLayer.getBoundingClientRect();
     publishRect();
   };
   window.addEventListener("resize", remeasure);
@@ -208,6 +320,12 @@ export async function runRecording(
     if (dot) {
       dot.style.transform = `translate(${sample.x}px, ${sample.y}px)`;
     }
+
+    // In the scrolling fit the stimulus rect runs off both ends of its window,
+    // so "inside the rect" no longer implies "on screen" — and the moderator's
+    // control strip, which sits below that window, would normalise to a
+    // plausible point partway down the page. The window is checked first.
+    if (scrolling && !isInsideViewport(sample, viewport)) return;
 
     const nx = (sample.x - rect.left) / rect.width;
     const ny = (sample.y - rect.top) / rect.height;

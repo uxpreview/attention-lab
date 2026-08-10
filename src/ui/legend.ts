@@ -90,6 +90,28 @@ function specElement(spec: LegendSpec): HTMLElement {
     { class: "legend" },
     el("p", { class: "label legend-title" }, spec.title),
     ...body,
-    el("p", { class: "legend-note muted" }, spec.note)
+    /**
+     * The caption stays; the essay folds away.
+     *
+     * Every mode used to print its full `note` under the stage on every view —
+     * 68 words and a measured 174px for the heatmap — which is a paragraph a
+     * researcher reads once and then scrolls past forever, on the screen where
+     * the region table most needs the room. What survives inline is the ramp,
+     * its endpoint labels and one clause naming the quantity; the caveats a
+     * reader needs before *citing* the figure are one disclosure away, and the
+     * print stylesheet forces that disclosure open so a paper figure still
+     * carries its full caption.
+     */
+    el(
+      "div",
+      { class: "legend-read" },
+      el("p", { class: "legend-caption" }, spec.caption),
+      el(
+        "details",
+        { class: "legend-how" },
+        el("summary", {}, "How to read this"),
+        el("p", { class: "legend-note muted" }, spec.note)
+      )
+    )
   );
 }

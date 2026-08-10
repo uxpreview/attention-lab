@@ -119,6 +119,35 @@ export function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/**
+ * One gaze sample, in milliseconds. The tracker runs at the camera's frame
+ * rate, which is ~30fps on every webcam this tool is aimed at, so nothing it
+ * measures can be resolved finer than this.
+ */
+export const SAMPLE_PERIOD_MS = 33;
+
+/**
+ * A latency measured from t=0 of a recording — a time-to-first-fixation.
+ *
+ * These have a floor the other durations do not. Capture starts with the
+ * participant already looking at the screen, so anyone whose first fixation is
+ * already inside a region produces a value below one sample interval, and
+ * `formatMs` rendered that as a bare "0ms": a broken counter rather than a
+ * measurement, sitting in a headline row beside two numbers that are correct
+ * and graded. Below one sample the honest reading is "sooner than this tool
+ * can resolve", so it says that and explains itself in the title.
+ */
+export function formatOnset(ms: number): { label: string; note: string | null } {
+  if (!Number.isFinite(ms)) return { label: "—", note: null };
+  if (ms < SAMPLE_PERIOD_MS) {
+    return {
+      label: `<${SAMPLE_PERIOD_MS}ms`,
+      note: `Under one gaze sample (~${SAMPLE_PERIOD_MS}ms): the participant was already fixating the region when capture began, so the onset cannot be timed more precisely than this.`,
+    };
+  }
+  return { label: formatMs(ms), note: null };
+}
+
 export function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }

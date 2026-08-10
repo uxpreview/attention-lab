@@ -122,6 +122,16 @@ export interface LegendSpec {
   ticks: LegendTick[] | null;
   /** A colour-per-thing key, or null when the scale is continuous. */
   swatches: LegendSwatch[] | null;
+  /**
+   * One clause naming what the picture is, shown inline beside the ramp.
+   *
+   * The full {@link note} is what a reader needs *once*, and it was being
+   * printed in full on every view: a measured 68 words and 174px of the primary
+   * analysis screen, every mode, forever, pushing the region table below the
+   * fold. The caption is what stays visible; the note moves into a disclosure
+   * beside it (and is forced open on paper, where a figure keeps its caption).
+   */
+  caption: string;
   /** The caveat a reader needs before citing the picture. */
   note: string;
 }
@@ -158,6 +168,7 @@ export function legendFor(
         maxLabel: "Most looked at",
         ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
+        caption: "Total fixation time per area, scaled to this selection.",
         // The percentile named here is the one renderHeatmap actually defaults
         // to, and it is a percentile of the per-blob peaks rather than of the
         // pixels — see fieldCeiling. It said "98th" for a clamp that no longer
@@ -175,6 +186,7 @@ export function legendFor(
         // same ticks name them.
         ticks: scale && scale.ceiling > 0 ? durationTicks(scale.ceiling) : null,
         swatches: null,
+        caption: "The heatmap's scale, quantised into bands you can cite.",
         note: "The same fixation-duration scale as the heatmap, quantised into equal bands so a region can be cited by band. Below the first band is left clear.",
       };
     case "spotlight":
@@ -193,6 +205,7 @@ export function legendFor(
         // does not encode.
         ticks: null,
         swatches: null,
+        caption: "The stimulus dimmed everywhere except where fixations landed.",
         note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed. Reveal is boosted, so a moderately-attended region clears fully.",
       };
     case "scanpath":
@@ -204,6 +217,7 @@ export function legendFor(
         maxLabel: "Last",
         ticks: null,
         swatches: null,
+        caption: "Fixations in order, dark first through light last; area is dwell.",
         // The ramp is viridis rather than a hue sweep, so the strip above reads
         // as an ordering on its own — dark to light — and survives greyscale
         // and colour vision deficiency. The thinning is stated because a reader
@@ -220,6 +234,7 @@ export function legendFor(
         maxLabel: "",
         ticks: null,
         swatches: participants.map((label, i) => ({ colour: participantColour(i), label })),
+        caption: "Every gaze sample, before fixation detection.",
         note: "Every gaze sample, roughly 30 per second, before fixation detection. Density reads as saturation; a lone dot is as likely to be tracker noise as a look.",
       };
   }

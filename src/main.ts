@@ -9,7 +9,7 @@ import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/r
 import { describeAccuracy, runCalibration } from "./ui/calibration";
 import { appBar, LAB_URL } from "./ui/chrome";
 import { clear, confirmButton, el, relativeDay } from "./ui/dom";
-import { runRecording } from "./ui/record";
+import { controlBandHeight, FIT_SCALE_FLOOR, fitStimulus, runRecording } from "./ui/record";
 import { renderResults } from "./ui/results";
 
 const app = mountPoint("app");
@@ -322,9 +322,13 @@ function setupSection(editing: Study | null, studyCount: number): HTMLElement {
           "Studies",
           el("span", { class: "pill pill-count" }, String(studyCount))
         ),
+        // Outlined, not filled. Every filled pill on this screen is a row's
+        // "Run session" — one per study, in one column — and adding a fourth
+        // fill in a different band for the occasional action would put the
+        // list back where it started: a screen with no single anchor.
         el(
           "button",
-          { class: "btn btn-primary", type: "button", onclick: () => showForm(null, true) },
+          { class: "btn", type: "button", onclick: () => showForm(null, true) },
           "New study"
         )
       )
@@ -481,20 +485,26 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
     el(
       "div",
       { class: "study-actions" },
-      // Two fixed slots, two fixed treatments.
+      // Two fixed slots, two fixed treatments, and the row's verb is the filled
+      // one.
       //
       // The fill used to move: filled on Run session at zero recordings and on
       // Results once there were any, so down a list of three studies the one
       // high-contrast teal pill jumped between the first and the second column
-      // and the eye could not establish either. On twenty studies that is a row
-      // you have to re-read individually every time. It also put three filled
-      // pills on one screen, against the rule .btn-primary states for itself.
+      // and the eye could not establish either. The cure was to flatten
+      // everything, which left a list of twelve identical outline pills in
+      // which the app's primary verb carried no more weight than Edit — same
+      // border, same ink, same 600 weight, differing only in width — and no
+      // entry point anywhere in the list.
       //
-      // So neither row action is filled — the screen's one filled pill is "New
-      // study" in the list head — and "this study has data" is said where a
-      // researcher already scans for it: the recording count at the head of the
-      // meta line, which is --strong at 600 with data and muted without (see
-      // .study-count). Emphasis in the type, not in the buttons.
+      // What was actually wrong was the *moving*, not the fill. Run session is
+      // the same column on every row, so filling it consistently costs nothing
+      // and gives the list the one thing it lacked. The list head's "New study"
+      // steps back to an outline in exchange: every filled pill on this screen
+      // now means "start work on this study", which is the rule .btn-primary
+      // states for itself. "This study has data" is still said where a
+      // researcher scans for it — the recording count at the head of the meta
+      // line, --strong at 600 with data and muted without (see .study-count).
       //
       // Where a session cannot run the button is disabled rather than hidden: a
       // control that vanishes leaves you wondering whether the tool is broken,
@@ -542,7 +552,8 @@ function runSessionButton(study: Study): HTMLButtonElement {
   const btn = el(
     "button",
     {
-      class: "btn",
+      // Filled, in the same column on every row — see the note in studyCard.
+      class: "btn btn-primary",
       type: "button",
       // Re-checked at click time rather than trusted from render time: the
       // window can be resized between the two.
@@ -650,6 +661,46 @@ function newStudyForm(
     el("span", { class: "muted" }, "PNG or JPG · or use a URL")
   );
 
+  /**
+   * What the participant will actually see, said before a participant is spent.
+   *
+   * A 1280×1600 full-page screenshot letterboxed into a 1440×804 recording
+   * stage renders 643px wide — every label at half its designed size, on the
+   * screen the finding is made on. The recording stage now switches such a
+   * stimulus to full width and scrolls it (see ui/record.ts), but the operator
+   * should still be told which of the two they are getting, and warned when
+   * even full width leaves the text small. This is that line, computed from the
+   * machine the study is being set up on.
+   */
+  const scaleNote = el("p", { class: "stimulus-scale", hidden: true, role: "status" });
+  const describeStimulusScale = (width: number, height: number): void => {
+    if (width <= 0 || height <= 0) {
+      scaleNote.hidden = true;
+      return;
+    }
+    // The same rule the recording stage applies, called rather than restated —
+    // a setup form quoting a different number from the one a participant gets
+    // would be worse than saying nothing.
+    const fit = fitStimulus(
+      { width, height },
+      {
+        width: window.innerWidth,
+        height: Math.max(1, window.innerHeight - controlBandHeight(window.innerHeight)),
+      }
+    );
+    const scale = fit.scale;
+    const percent = Math.round(scale * 100);
+    const scrolls = fit.mode === "width";
+    scaleNote.hidden = false;
+    scaleNote.classList.toggle("is-warn", scale < FIT_SCALE_FLOOR);
+    scaleNote.textContent =
+      scale < FIT_SCALE_FLOOR
+        ? `${width}×${height}. On a screen this size a participant sees it at about ${percent}% — small labels may be unreadable, which puts the finding in doubt rather than only the look of it. Crop it, or export the wireframe larger.`
+        : scrolls
+          ? `${width}×${height}. Taller than the recording stage, so it is shown at full width (about ${percent}%) and scrolled.`
+          : `${width}×${height}. Fits the recording stage at about ${percent}%.`;
+  };
+
   let file: File | null = null;
   const setFile = (next: File | null) => {
     file = next;
@@ -659,6 +710,16 @@ function newStudyForm(
     // field — beats silently ignoring whatever was typed there.
     urlInput.disabled = next !== null;
     urlInput.placeholder = next ? "Using the uploaded image" : "https://example.com";
+    if (!next) {
+      scaleNote.hidden = true;
+      return;
+    }
+    // Racy by nature — a second drop can land while the first is decoding — so
+    // the result is discarded unless it is still the selected file.
+    void readImageDimensions(next).then((dimensions) => {
+      if (file !== next) return;
+      describeStimulusScale(dimensions.width, dimensions.height);
+    });
   };
 
   fileInput.addEventListener("change", () => setFile(fileInput.files?.[0] ?? null));
@@ -808,6 +869,7 @@ function newStudyForm(
     "div",
     { class: "setup-controls" },
     existing ? null : dropZone,
+    existing ? null : scaleNote,
     // Two columns rather than auto-fit's three: at three, Duration was left
     // alone on a row of its own with two thirds of it empty directly above the
     // submit button. Paired with the URL field, the grid closes.

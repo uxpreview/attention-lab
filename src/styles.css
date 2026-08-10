@@ -488,7 +488,12 @@ p {
   border: 1px solid var(--line);
   border-radius: var(--r-chip);
   padding: 6px 14px;
-  color: var(--muted);
+  /* --muted measures 4.40:1 at this size and weight on --tint: a hairline miss
+     of AA, on the one element that reconciles the header count with the rail —
+     the number a researcher checks before citing anything. --body-2 measures
+     7.0:1 and the chip stays quieter than the h1 beside it by size, weight and
+     ground rather than by contrast alone. */
+  color: var(--body-2);
   white-space: nowrap;
 }
 .pill-quiet {
@@ -548,9 +553,12 @@ p {
   border-color: var(--accent-hover);
   color: var(--accent-contrast);
 }
+/* --body-2, not --muted: the rest label of a two-step confirm ("Remove",
+   "Delete") measured 4.40:1 on --tint at 12px/600, and the resting state of a
+   destructive control is not the place to spend a hairline AA miss. */
 .btn-ghost {
   border-color: transparent;
-  color: var(--muted);
+  color: var(--body-2);
 }
 .btn-ghost:hover {
   border-color: transparent;
@@ -614,6 +622,27 @@ p {
 }
 .confirm-btn.is-armed .confirm-armed {
   visibility: visible;
+}
+/* An icon at rest, the verb only once armed.
+ *
+ * Six region rows each repeating "Remove", beside a Recordings card repeating
+ * "Delete", put eleven destructive verbs on one screen and out-weighted the
+ * measurements the table exists to report. The aria-label carries the full
+ * "Remove region <name>" throughout, so nothing is lost to a screen reader, and
+ * both labels still share one grid cell so arming cannot reflow the row. */
+.confirm-icon {
+  border-color: transparent;
+  color: var(--body-2);
+  padding: 6px 10px;
+  min-width: 74px;
+}
+.confirm-icon .confirm-rest {
+  font-size: 14px;
+  line-height: 1;
+}
+.confirm-icon:hover {
+  border-color: transparent;
+  color: var(--signal-bad);
 }
 
 .input {
@@ -902,7 +931,8 @@ p {
 .setup-controls .field-grid {
   margin-top: 0;
 }
-.setup-controls > .drop-zone + .field-grid {
+.setup-controls > .drop-zone + .field-grid,
+.setup-controls > .stimulus-scale + .field-grid {
   margin-top: 20px;
 }
 
@@ -931,6 +961,26 @@ p {
 .drop-zone.has-file {
   border-style: solid;
   border-color: var(--accent);
+}
+/* What the participant will actually see, before a participant is spent on it.
+   A full-page screenshot rendered at half scale asks someone to find a control
+   on text they cannot read, which puts the finding in doubt rather than only
+   the look of the screen — so the scale is stated here, at upload, not
+   discovered mid-session. */
+.stimulus-scale {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--body-2);
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+}
+.stimulus-scale.is-warn {
+  color: var(--body);
+  border-left-color: var(--signal-warn);
+}
+.stimulus-scale[hidden] {
+  display: none;
 }
 .drop-icon {
   display: flex;
@@ -985,9 +1035,17 @@ p {
   display: grid;
   gap: 14px;
 }
+/* Four tracks, one of them deliberately empty.
+ *
+ * At `96px 1fr auto` the metadata column took every pixel between the thumbnail
+ * and the buttons, so on a 1320px card the meta line's ink ended at x=507 and
+ * the actions began at x=958: a measured 451px void — 34% of the card — that
+ * the eye had to cross on every row. Capping the text at a reading measure and
+ * giving the slack its own track collects the emptiness in one place, before
+ * the actions, instead of stretching it through the row. */
 .study-card {
   display: grid;
-  grid-template-columns: 96px 1fr auto;
+  grid-template-columns: 96px minmax(0, 46ch) 1fr auto;
   gap: 18px;
   align-items: center;
   background: var(--surface);
@@ -1070,7 +1128,10 @@ p {
   color: var(--muted);
   font-weight: 400;
 }
+/* The last track, explicitly: the third is the slack that used to sit inside
+   the metadata column. */
 .study-actions {
+  grid-column: 4;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -1346,6 +1407,14 @@ p {
   margin: 4px 0 0;
   font-size: 14px;
 }
+/* A 7px dot is not enough to carry "do not record with this".
+ *
+ * All four grades rendered as the same --tint card with the same --edge border,
+ * differing only in the colour of that dot — so "Poor: ~6.5°", which means the
+ * operator is about to record data this app's own bench notes call worthless,
+ * arrived with exactly the weight of "Good", directly above the filled Start
+ * recording button. The Recordings list already solves this with .is-low-signal
+ * and a coloured left edge; below-threshold now means one thing everywhere. */
 .accuracy-good strong::before {
   background: var(--signal-good);
 }
@@ -1354,6 +1423,19 @@ p {
 }
 .accuracy-poor strong::before {
   background: var(--signal-bad);
+}
+.accuracy-usable,
+.accuracy-poor {
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+.accuracy-usable {
+  border-left-color: var(--signal-warn);
+  background: color-mix(in srgb, var(--signal-warn) 8%, var(--tint));
+}
+.accuracy-poor {
+  border-left-color: var(--signal-bad);
+  background: color-mix(in srgb, var(--signal-bad) 8%, var(--tint));
 }
 
 /* --- The two dark rooms ----------------------------------------------- */
@@ -1446,30 +1528,68 @@ p {
   margin: 0;
   font-size: 13px;
 }
-/* The counter stays visible for the whole 18-click sequence — the dimming
-   instruction panel above must never take the progress readout with it. It
-   shares a line with the face-lost warning, in the thin band at the foot of the
-   screen that no calibration or validation point reaches: where you are in the
-   sequence and why nothing is being collected belong together. */
+/* Where you are in eighteen clicks, said loudly enough to be worth reading.
+ *
+ * It was 14px of low-contrast grey-teal centred at the foot of the window,
+ * which put it 42px from the y=0.92 dot row — so through the bottom third of
+ * the sequence the counter sat inside the halo of the dot the participant was
+ * aiming at — and it offered a bare fraction for a sequence whose denominator
+ * changes halfway through. Now: a corner block that steps aside rather than
+ * hiding (see keepStatusClear in ui/calibration.ts), a determinate bar spanning
+ * both phases, and a line saying what follows this one. The instruction panel
+ * above still dims; this never does. */
 .calib-status {
   position: absolute;
   bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 92vw;
+  right: 18px;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  width: 240px;
+  max-width: 46vw;
   pointer-events: none;
+  transition: none;
+}
+/* The one anchor a corner dot can reach is swapped for the other. Both are on
+   the right, and only a dot in the bottom-right can trigger the flip, so the
+   destination is clear by construction. */
+.calib-status.is-flipped {
+  bottom: auto;
+  top: 18px;
 }
 .calib-progress {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 16px;
+  font-weight: 600;
   letter-spacing: 0.005em;
-  color: var(--muted);
+  color: var(--strong);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* A fraction is a count, not progress. The bar is the only thing on this screen
+   that answers "how much of this is left", and it spans calibration and the
+   accuracy check together because that is the question the participant is
+   actually asking. */
+.calib-bar {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--strong) 22%, transparent);
+  overflow: hidden;
+}
+.calib-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.35s var(--ease-quint);
+}
+.calib-phase {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--body-2);
 }
 /* Bottom-left, which is the corner furthest from anything the participant is
    asked to hit: at top-right it overlapped calibration point 3's ring halo, so
@@ -1554,16 +1674,18 @@ p {
 /* Beside the counter, in the band the dots leave clear at the foot of the
    screen. Same treatment as the recording stage's .record-hint.is-lost, because
    it is the same condition and must not read as a different one. */
+/* Stacked under the counter now that the status block is a corner column, so it
+   wraps within the block rather than pushing the counter off centre. */
 .calib-lost {
-  margin: 0;
+  margin: 2px 0 0;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12.5px;
   letter-spacing: 0.005em;
+  line-height: 1.4;
   color: var(--signal-warn);
   background: color-mix(in srgb, #003f48 82%, transparent);
-  padding: 6px 14px;
-  border-radius: var(--r-chip);
-  white-space: nowrap;
+  padding: 6px 12px;
+  border-radius: 8px;
 }
 @keyframes pulse {
   0%,
@@ -1639,6 +1761,24 @@ p {
   max-height: 100%;
   object-fit: contain;
   display: block;
+}
+/* The width-first fit. A 1280×1600 screenshot letterboxed into a 1440×804 stage
+   renders 643px wide — every label at half its designed size, on the screen the
+   finding is actually made on. Below the readable floor the stimulus takes the
+   full width and the letterbox scrolls instead. Which of the two applies is
+   decided in ui/record.ts (fitStimulus), from the same numbers the setup form
+   quotes to the operator before a participant is spent. */
+.record-stimulus.is-scroll {
+  overflow-y: auto;
+  align-items: flex-start;
+}
+.record-image.is-fit-width {
+  /* Only the height cap is lifted. The image then takes its own natural width
+     up to the window's — min(native, window) — so a 1280px screenshot on a
+     1440px screen is pixel-exact and centred rather than upscaled, and a
+     1600px one is fitted to the width. */
+  max-height: none;
+  flex-shrink: 0;
 }
 .record-frame {
   width: 100%;
@@ -1957,6 +2097,28 @@ p {
   background: var(--tint);
   color: var(--strong);
 }
+/* What each file will actually contain. Five identical rows could not say that
+   one of them is a different kind of promise: the four view exports carry the
+   screen's current scope, Session JSON is the whole archive including the
+   low-signal recordings the screen is excluding. */
+.menu-item {
+  display: grid;
+  gap: 1px;
+}
+.menu-item-note {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.menu-item:hover .menu-item-note {
+  color: var(--body-2);
+}
+.menu-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--line);
+}
 .menu-caret {
   font-size: 9px;
   vertical-align: 1px;
@@ -1983,19 +2145,34 @@ p {
      recording. Rows keep their own heights; the slack collects at the foot. */
   align-content: start;
 }
-/* Before the first recording there is nothing to put in a rail.
+/* The rail is kept before the first recording, and given something to hold.
  *
- * The rail's populated job — the view switcher, the participant filter, the
- * headline numbers — does not exist yet, so it collapses to a 320×198 "VIEW"
- * card and reserves a full-height column anyway: a measured 320×517px of empty
- * cream beside the stage, in the state a first-time visitor is most likely to
- * open. Exactly the failure the note above .results-data describes fixing for
- * the populated screen. With no recordings the short card flows under the
- * stage instead. `.recording-list` is rendered only when there are recordings,
- * so the layout reads its own contents rather than trusting a class to be
- * kept in sync. */
-.results-layout:not(:has(.recording-list)) {
-  grid-template-columns: minmax(0, 1fr);
+ * It was collapsed away here, because its populated job — the view switcher,
+ * the participant filter, the headline numbers — does not exist yet and a
+ * 320×198 "VIEW" card reserving a full-height column left a measured 320×517px
+ * of empty cream. But collapsing it produced something worse: three stacked
+ * full-width strips, a 1320×320 stage over a 1320×126 "rail" over a 1320×104
+ * table, so the screen a first-time visitor meets is a different skeleton from
+ * the one their first recording produces and the structure has to be re-learned
+ * the moment it lands. The grid stays; the rail earns its 320px instead, with
+ * what happens next and the button that does it (see buildSidebar in
+ * ui/results.ts). */
+.next-steps {
+  margin: 0 0 18px;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--body-2);
+}
+.next-steps li::marker {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--muted);
+}
+.results-sidebar .next-steps + .btn {
+  width: 100%;
 }
 .results-main {
   min-width: 0;
@@ -2104,10 +2281,63 @@ p {
   justify-content: center;
   min-height: 320px;
 }
-/* The zoom affordance. Off above 640px, where the stage is already big enough
-   to read — see the handheld block at the foot of this file. */
-.stage-zoom {
-  display: none;
+/* The stage's fit controls, at every width.
+ *
+ * "Expand" used to be `display: none` above 640px, on the argument that a
+ * desktop stage is already big enough to read. Measurement disagreed: at
+ * 1440×900 a 976px stage held a 562px figure — 42.6% of the primary analysis
+ * surface empty ground — precisely because the figure is height-capped, so the
+ * viewport where the affordance was switched off is the one where it was needed
+ * most. Both controls are now always present: Fit width releases the height cap
+ * and scrolls the stage, Expand takes the figure to the whole viewport. */
+.stage-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+}
+.stage-tools .btn {
+  /* Over the artboard, so it needs its own ground to stay legible on a
+     stimulus of any colour. */
+  background: var(--surface);
+}
+/* Fit-width: the stimulus takes the stage's full measure and the stage scrolls
+   on Y. The overlay and the region layer are inset to the figure in CSS, so
+   they grow with it exactly — this is the same registration the print path
+   relies on, not a second sizing rule that could disagree with the first.
+   Scoped to the stage's scroller: inside the lightbox the figure takes the
+   viewport and its own caps govern. */
+.stage-scroll > .results-figure.is-fit-width {
+  width: 100%;
+  max-height: none;
+}
+/* The stage's scrolling interior. The stage itself never scrolls, so the fit
+   controls pinned to its corner stay put — an absolutely positioned child of a
+   scroll container travels with the content, which would carry the Fit toggle
+   off the top of the very state it puts the stage into. */
+.stage-scroll {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.results-stage.is-scrolling {
+  /* The same ceiling the contained figure keeps. Without it the stage simply
+     grows to the full height of a 1600px screenshot and the page scrolls
+     instead of the artboard — which puts the legend and the region table an
+     entire stimulus below the picture they describe. */
+  max-height: 78vh;
+}
+.results-stage.is-scrolling .stage-scroll {
+  overflow-y: auto;
+  /* A taller-than-the-stage figure has to start at the top, or the first thing
+     the operator sees is the middle of the page. */
+  align-items: flex-start;
 }
 /* The measured rect, as a box rather than as a number.
  *
@@ -2242,9 +2472,6 @@ p {
 .results-main:has(.stage-empty) .results-stage {
   border-radius: var(--r-card) var(--r-card) 0 0;
 }
-.placeholder-actions {
-  margin-top: 16px;
-}
 
 /* --- Legend ----------------------------------------------------------- */
 /* Built from the same lookup tables the overlay is painted with, so the strip
@@ -2364,8 +2591,62 @@ p {
   border: 1px solid color-mix(in srgb, var(--strong) 20%, transparent);
   flex-shrink: 0;
 }
-.legend-note {
+/* The caption stays; the essay folds.
+ *
+ * Every mode printed its full note under the stage on every view — 68 words and
+ * a measured 976×174 block for the heatmap — which pushed the region table
+ * below the fold on the screen the study's findings live on, to repeat a
+ * paragraph a researcher reads once. What is inline now is the ramp, its
+ * endpoint labels and one clause naming the quantity; the caveats needed before
+ * *citing* the figure are one disclosure away, and the print block at the foot
+ * of this file forces that disclosure open so a paper figure keeps its full
+ * caption. */
+.legend-read {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.legend-caption {
   margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--body-2);
+  max-width: 60ch;
+}
+.legend-how > summary {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.005em;
+  color: var(--accent-ink);
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  width: fit-content;
+}
+.legend-how > summary::-webkit-details-marker {
+  display: none;
+}
+/* A drawn marker rather than the UA triangle, which differs per browser and
+   sits on a baseline this row does not have. */
+.legend-how > summary::before {
+  content: "+";
+  font-size: 13px;
+  line-height: 1;
+  width: 12px;
+  text-align: center;
+}
+.legend-how[open] > summary::before {
+  content: "−";
+}
+.legend-how > summary:hover {
+  color: var(--strong);
+}
+.legend-note {
+  margin: 6px 0 0;
   font-size: 13px;
   line-height: 1.5;
   max-width: 78ch;
@@ -2402,31 +2683,60 @@ p {
   border: 1px solid var(--edge);
   border-radius: var(--seg-radius);
 }
+/* Every cell reads as a cell.
+ *
+ * Only .is-active had a ground; the other four were transparent, borderless and
+ * --muted, which in a mono face inside a bordered box is indistinguishable from
+ * static list text — the group read as a nav list with one item highlighted,
+ * and nothing said "Contours" was pressable until the pointer happened to cross
+ * it. A resting surface with a hairline ring gives all five the same raised
+ * track, and the inactive ink comes up from --muted so the group does not look
+ * three-quarters disabled. */
 .seg {
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.005em;
-  background: transparent;
+  background: var(--surface);
   border: 0;
+  /* Inset rather than a border: a real border would take 1px out of the cell
+     and pull its corner radius away from the track's. */
+  box-shadow: inset 0 0 0 1px var(--line);
   border-radius: calc(var(--seg-radius) - 3px);
   padding: 8px 12px;
   text-align: center;
-  color: var(--muted);
+  color: var(--body-2);
   cursor: pointer;
   transition:
     background-color 0.2s,
+    box-shadow 0.2s,
     border-color 0.2s,
     color 0.2s;
+}
+/* The cells are flush in the stacked track, so a shared hairline between two
+   neighbours would double up. Collapsing the seam keeps one line per join. */
+.segmented > .seg + .seg {
+  margin-top: -1px;
+}
+@media (max-width: 1180px) and (min-width: 641px) {
+  .segmented > .seg + .seg {
+    margin-top: 0;
+    margin-left: -1px;
+  }
 }
 .seg:hover {
   color: var(--strong);
   background: var(--tint);
+  box-shadow: inset 0 0 0 1px var(--edge);
 }
 .seg.is-active {
   background: var(--accent);
   border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
   color: var(--accent-contrast);
+  /* The selected cell sits over its neighbours' collapsed seams. */
+  position: relative;
+  z-index: 1;
 }
 
 .stat-row {
@@ -2538,12 +2848,19 @@ abbr[title] {
   text-underline-offset: 3px;
   cursor: help;
 }
-/* A resting rule, because these are the only way to rename a region and with
-   a fully transparent border they read as static text. */
+/* A resting rule, but a whisper of one.
+ *
+ * These are the only way to rename a region, so a fully transparent border
+ * would leave the control reading as static text with no hint that it is
+ * editable — which is why the rule exists. At --edge, though, six of them ran
+ * down the Region column as six of the heaviest lines on the screen and
+ * out-weighed the Seen/Dwell/TTFF figures the table exists to report. Dropped to
+ * a fraction of the hairline it is still visible as an affordance and no longer
+ * competes with the numbers; hover and focus bring it up to full strength. */
 .inline-input {
   background: transparent;
   border: 1px solid transparent;
-  border-bottom-color: var(--edge);
+  border-bottom-color: color-mix(in srgb, var(--line) 60%, transparent);
   border-radius: 4px 4px 0 0;
   color: var(--strong);
   font: inherit;
@@ -2578,9 +2895,12 @@ abbr[title] {
   padding: 0;
   font-size: 14px;
 }
+/* Top-aligned, not centred: a flagged row carries a second line, and centring
+   the Delete button against a two-line block floats it in the middle of
+   nothing. */
 .recording-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   padding: 8px 0;
@@ -2595,6 +2915,17 @@ abbr[title] {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+/* Why a recording was dropped, on the screen rather than in a title attribute
+   — unreachable on touch, silent to a keyboard, and absent from the screenshot
+   that ends up in the write-up. Styled like .recording-stats, in the same
+   --signal-bad the row's left edge wears. */
+.recording-reason {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--signal-bad);
+  max-width: 62ch;
 }
 /* A 44%-tracked session used to be printed in exactly the same grey as a 91%
    one, and folded into the same aggregate without a word. The tokens for this
@@ -2776,6 +3107,28 @@ abbr[title] {
    now, as a labelled two-step control like every other destructive action in
    the app. */
 
+/* The mask needs the whole stage, not just the canvas.
+ *
+ * The spotlight is painted on .results-overlay, which is inset to the figure —
+ * so everything around the figure kept the artboard's near-cream and the mask
+ * read as a black rectangle floating in a bright surround, which is the exact
+ * opposite of the reveal an opacity map is supposed to produce. The stage
+ * ground goes with it, on the same 0.2s the view cells use so switching modes
+ * does not flash. */
+.results-stage {
+  transition: background-color 0.2s;
+}
+.stage--spotlight {
+  background: #0a0c0d;
+  border-color: #0a0c0d;
+}
+/* The tool buttons keep their own surface, which is a cream chip on a black
+   ground — legible, but shouting. Quieted to the mask's own palette. */
+.stage--spotlight .stage-tools .btn {
+  background: color-mix(in srgb, #0a0c0d 78%, var(--surface));
+  border-color: color-mix(in srgb, var(--surface) 40%, transparent);
+  color: var(--bg);
+}
 /* Spotlight dims the stage to a near-black mask, and a deep-teal box with a
    dark label chip disappears into it — the two regions in the screenshot were
    barely findable. Under the mask the region ink inverts to cream. */
@@ -3065,16 +3418,16 @@ abbr[title] {
   /* The stimulus is ~250px wide here — heat blobs become smudges and the
      numbered badges overlap — while the AOI table under it stays perfectly
      readable. Reading results on a phone between meetings is a real use, so the
-     figure gets a way to take the whole screen. */
-  .stage-zoom {
-    display: inline-flex;
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    z-index: 2;
+     figure keeps its way to take the whole screen. */
+  .stage-tools .btn {
     padding: 8px 14px;
     font-size: 12px;
-    background: var(--surface);
+  }
+  /* The figure is already width-bound at this size — max-width, not max-height,
+     is what constrains it — so a fit-width toggle would be a control with no
+     effect. Expand is the one that still does something. */
+  .stage-fit {
+    display: none;
   }
 }
 
@@ -3159,12 +3512,11 @@ abbr[title] {
   .app-footer,
   .results-actions,
   .stage-empty,
-  .placeholder-actions,
   .segmented,
   .checkbox,
   .cell-action,
   .col-action,
-  .stage-zoom,
+  .stage-tools,
   /* Live controls do not belong on paper. The view chips were already gone;
      the participant <select> printed as a form control and the Recordings list
      printed five Delete buttons. What each of those controls was *set to* is a
@@ -3178,6 +3530,22 @@ abbr[title] {
   /* The mirror of the rule above: static text that only exists on paper. */
   .print-only {
     display: block !important;
+  }
+  /* A figure on paper keeps its whole caption: the disclosure that folds the
+     legend's caveats away on screen is forced open here, and its summary — a
+     control, and a lie on paper — goes. Two mechanisms because engines differ:
+     Chrome hides the contents through the ::details-content pseudo-element,
+     Firefox and Safari through display on the children. */
+  .legend-how > summary {
+    display: none !important;
+  }
+  .legend-how > * {
+    display: block !important;
+  }
+  .legend-how::details-content {
+    content-visibility: visible !important;
+    /* The pseudo also carries a zero block-size in the closed state. */
+    block-size: auto !important;
   }
   .screen,
   .screen-fill {
