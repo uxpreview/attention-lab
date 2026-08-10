@@ -50,8 +50,12 @@ function tx<T>(
       new Promise<T>((resolve, reject) => {
         const transaction = db.transaction(storeName, mode);
         const request = run(transaction.objectStore(storeName));
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        // Resolve on the transaction completing, not the request succeeding:
+        // a write request "succeeds" before it is committed, and a tab closed
+        // in that window would have reported a save that never happened.
+        transaction.oncomplete = () => resolve(request.result);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
       })
   );
 }
@@ -60,19 +64,34 @@ export function saveStudy(study: Study): Promise<IDBValidKey> {
   return tx(STUDIES, "readwrite", (store) => store.put(study));
 }
 
-export function getStudy(id: string): Promise<Study | undefined> {
-  return tx<Study | undefined>(STUDIES, "readonly", (store) => store.get(id));
-}
-
 export async function listStudies(): Promise<Study[]> {
   const studies = await tx<Study[]>(STUDIES, "readonly", (store) => store.getAll());
   return studies.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function deleteStudy(id: string): Promise<void> {
-  const recordings = await listRecordings(id);
-  await Promise.all(recordings.map((r) => deleteRecording(r.id)));
-  await tx(STUDIES, "readwrite", (store) => store.delete(id));
+  // One transaction over both stores, so the study and its recordings go
+  // together or not at all — a crash mid-delete must not leave orphaned
+  // recordings behind, or a study whose data is half gone.
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STUDIES, RECORDINGS], "readwrite");
+    const cursorRequest = transaction
+      .objectStore(RECORDINGS)
+      .index("studyId")
+      .openCursor(id);
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      }
+    };
+    transaction.objectStore(STUDIES).delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
 }
 
 export function saveRecording(recording: Recording): Promise<IDBValidKey> {

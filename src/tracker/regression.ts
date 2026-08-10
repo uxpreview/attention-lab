@@ -338,6 +338,36 @@ export function serialiseModel(model: RidgeModel): SerialisedModel {
   };
 }
 
+/**
+ * True when `data` has the shape and dimensions of a model serialised from a
+ * `dim`-feature basis. Persisted models cross a storage boundary the type
+ * system cannot see across, so the shape is checked rather than trusted: a
+ * dimension mismatch at predict time either reads past the feature array
+ * (NaN, and gaze silently never emits) or misaligns every column (confidently
+ * wrong gaze), and neither failure announces itself.
+ */
+export function isSerialisedModel(data: unknown, dim: number): data is SerialisedModel {
+  if (typeof data !== "object" || data === null) return false;
+  const record = data as Record<string, unknown>;
+  const finiteVector = (value: unknown, length: number): boolean =>
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every((v) => typeof v === "number" && Number.isFinite(v));
+
+  return (
+    finiteVector(record.mean, dim) &&
+    finiteVector(record.std, dim) &&
+    // Weights carry a leading intercept on top of the feature columns.
+    finiteVector(record.wx, dim + 1) &&
+    finiteVector(record.wy, dim + 1) &&
+    typeof record.lambda === "number" &&
+    Number.isFinite(record.lambda) &&
+    typeof record.sampleCount === "number"
+    // cvError is deliberately unchecked: it is allowed to be NaN, which JSON
+    // round-trips as null.
+  );
+}
+
 export function deserialiseModel(data: SerialisedModel): RidgeModel {
   return {
     mean: Float64Array.from(data.mean),

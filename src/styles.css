@@ -412,7 +412,7 @@ p {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   background: transparent;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--strong) 25%, var(--line));
   border-radius: var(--r-chip);
   padding: 6px 14px;
   color: var(--muted);
@@ -435,7 +435,10 @@ p {
   text-transform: uppercase;
   background: transparent;
   color: var(--strong);
-  border: 1.5px solid var(--line);
+  /* The hairline alone is ~1.2:1 on cream — far under the 3:1 non-text
+     contrast a component boundary needs. A quarter of --strong mixed in
+     lands the border around 3:1 while keeping the quiet register. */
+  border: 1.5px solid color-mix(in srgb, var(--strong) 25%, var(--line));
   border-radius: var(--r-chip);
   padding: 12px 24px;
   cursor: pointer;
@@ -486,9 +489,17 @@ p {
 .input::placeholder {
   color: var(--muted);
 }
+/* Pointer focus keeps the quiet border swap; keyboard focus keeps the global
+   2px outline, which the border change alone is nowhere near replacing. */
 .input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+.input:focus:not(:focus-visible) {
+  outline: none;
+}
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .field {
@@ -537,6 +548,7 @@ p {
 }
 
 .drop-zone {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -568,8 +580,20 @@ p {
   letter-spacing: -0.01em;
   color: var(--strong);
 }
+/* Visually hidden, not display:none: the input has to stay in the tab order,
+   because it is the keyboard's only route to the form's primary action. */
 .file-input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The input is invisible, so its focus ring is drawn on the drop zone. */
+.drop-zone:has(.file-input:focus-visible) {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
 }
 
 /* --- Study list ------------------------------------------------------- */
@@ -633,13 +657,14 @@ p {
   margin: 0;
   font-size: 14px;
 }
-.study-meta {
+/* Written against .study-body p so specificity does the work !important did. */
+.study-body p.study-meta {
   font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 12px !important;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  margin-top: 6px !important;
+  margin-top: 6px;
 }
 .study-actions {
   display: flex;
@@ -652,6 +677,24 @@ p {
   padding: 52px 20px;
   border: 1px dashed var(--line);
   border-radius: var(--r-card);
+}
+/* A first visit's primary message should not wear the smallest, faintest
+   voice on the page: the empty-state heading rejoins the display register. */
+.empty h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--strong);
+  margin: 0 0 6px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 
 /* --- Session ---------------------------------------------------------- */
@@ -777,6 +820,12 @@ p {
   background: var(--bg);
   color: var(--body);
 }
+/* Focus is moved onto the overlays programmatically when they open; the
+   container itself needs no ring for that. */
+.calib-overlay:focus,
+.record-stage:focus {
+  outline: none;
+}
 .record-stage {
   display: flex;
   align-items: center;
@@ -797,13 +846,26 @@ p {
 .calib-instruction.is-dim {
   opacity: 0;
 }
+/* The counter stays visible for the whole 18-click sequence — the dimming
+   instruction panel above must never take the progress readout with it. */
 .calib-progress {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.calib-cancel {
+  position: absolute;
+  top: 18px;
+  right: 18px;
 }
 .calib-dot {
   position: absolute;
@@ -852,11 +914,18 @@ p {
   border: 0;
   background: #fff;
 }
-.record-progress {
+/* The peach fill needs a guaranteed ground: on its own it is ~1.6:1 over the
+   light page most stimuli are, which loses the one time-remaining signal. */
+.record-progress-track {
   position: absolute;
   top: 0;
   left: 0;
-  height: 2px;
+  right: 0;
+  height: 6px;
+  background: color-mix(in srgb, #003f48 85%, transparent);
+}
+.record-progress {
+  height: 100%;
   width: 0;
   background: var(--accent);
 }
@@ -868,11 +937,21 @@ p {
 .record-chrome > * {
   pointer-events: auto;
 }
-.record-hint {
+.record-controls {
   position: absolute;
   bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The buttons sit over the stimulus, which is usually a light page, so they
+   carry the same dark backing as the hint pill to stay legible on it. */
+.record-controls .btn {
+  background: color-mix(in srgb, #003f48 82%, transparent);
+}
+.record-hint {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.12em;
@@ -881,6 +960,10 @@ p {
   background: color-mix(in srgb, #003f48 82%, transparent);
   padding: 6px 14px;
   border-radius: var(--r-chip);
+  white-space: nowrap;
+}
+.record-hint.is-lost {
+  color: var(--signal-bad);
 }
 .task-prompt {
   position: absolute;
@@ -997,6 +1080,21 @@ p {
   max-height: 84vh;
   overflow-y: auto;
 }
+.stage-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+.stage-empty p {
+  margin: 0;
+  color: var(--body-2);
+  max-width: 34ch;
+}
 
 .segmented {
   display: flex;
@@ -1011,7 +1109,7 @@ p {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   background: transparent;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--strong) 25%, var(--line));
   border-radius: var(--r-chip);
   padding: 8px 12px;
   color: var(--muted);
@@ -1097,8 +1195,10 @@ p {
   border-color: var(--line);
 }
 .inline-input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+.inline-input:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .button-grid {
@@ -1143,6 +1243,9 @@ p {
   background: color-mix(in srgb, #003f48 10%, transparent);
   border-radius: 3px;
   pointer-events: auto;
+  /* Double stroke — the annotation-tool trick — so the box still reads when
+     the stimulus underneath is a dark screenshot. */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
 }
 .aoi-box.is-drawing {
   border-style: dashed;
@@ -1179,7 +1282,8 @@ p {
   opacity: 0;
   transition: opacity 0.2s ease;
 }
-.aoi-box:hover .aoi-remove {
+.aoi-box:hover .aoi-remove,
+.aoi-remove:focus-visible {
   opacity: 1;
 }
 .aoi-remove:hover {
@@ -1207,13 +1311,25 @@ p {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* A dead control must not advertise a live affordance: hovering a disabled
+   button keeps its resting look instead of the fill-and-flip treatment. */
 .btn[disabled]:hover {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--strong) 25%, var(--line));
+}
+.btn-primary[disabled]:hover {
   border-color: var(--accent);
+  color: var(--accent);
 }
 
 @media (max-width: 900px) {
   .results-layout {
     grid-template-columns: 1fr;
+  }
+  /* One column means the sidebar flows with the page; its own scroll region
+     would nest scroll-within-scroll on touch. */
+  .results-sidebar {
+    max-height: none;
   }
   .study-card {
     grid-template-columns: 1fr;

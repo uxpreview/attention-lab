@@ -14,7 +14,13 @@ import { fieldPercentile } from "../analysis/heatmap";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { MedianPoint, OneEuroPoint } from "../tracker/filter";
-import { deserialiseModel, fitRidge, predict, serialiseModel } from "../tracker/regression";
+import {
+  deserialiseModel,
+  fitRidge,
+  isSerialisedModel,
+  predict,
+  serialiseModel,
+} from "../tracker/regression";
 
 let failures = 0;
 let checks = 0;
@@ -330,6 +336,38 @@ section("Gaze model fitting");
   const [ax, ay] = predict(realistic.model, features);
   const [bx, by] = predict(restored, features);
   check("serialise/deserialise round-trips exactly", ax === bx && ay === by);
+}
+
+section("Stored calibration guard");
+{
+  // Persisted models arrive from session storage, which the type system
+  // cannot vouch for. The guard has to be exactly as strict as predict()
+  // needs: a dimension mismatch reads past the feature array (NaN, gaze
+  // silently never emits) or misaligns every column (confidently wrong gaze).
+  const rand = makeRandom(61);
+  const rows: number[][] = [];
+  const targetX: number[] = [];
+  const targetY: number[] = [];
+  for (let i = 0; i < 40; i++) {
+    const a = rand() * 2 - 1;
+    const b = rand() * 2 - 1;
+    const c = rand() * 2 - 1;
+    rows.push([a, b, c]);
+    targetX.push(2 * a - b + 3);
+    targetY.push(a + 4 * c - 1);
+  }
+  const data = serialiseModel(fitRidge(rows, targetX, targetY));
+  const roundTripped: unknown = JSON.parse(JSON.stringify(data));
+
+  check("accepts its own serialised form", isSerialisedModel(data, 3));
+  check("accepts a JSON round-trip", isSerialisedModel(roundTripped, 3));
+  check("rejects a model fit on a different basis size", !isSerialisedModel(data, 4));
+  check("rejects a truncated weight vector", !isSerialisedModel({ ...data, wx: data.wx.slice(1) }, 3));
+  check("rejects non-numeric entries", !isSerialisedModel({ ...data, std: [1, "1", 1] }, 3));
+  check(
+    "rejects payloads that are not models at all",
+    !isSerialisedModel(null, 3) && !isSerialisedModel("{}", 3) && !isSerialisedModel({}, 3)
+  );
 }
 
 // --- Filter --------------------------------------------------------------

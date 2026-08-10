@@ -11,9 +11,17 @@ import {
 } from "../data/export";
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
-import { clear, el, formatMs, formatPercent, nextFrame } from "./dom";
+import { clear, confirmButton, el, formatMs, formatPercent, nextFrame } from "./dom";
 
 type ViewMode = HeatmapStyle | "scanpath" | "raw";
+
+const VIEW_MODES: Array<[ViewMode, string]> = [
+  ["heat", "Heatmap"],
+  ["spotlight", "Spotlight"],
+  ["contour", "Contours"],
+  ["scanpath", "Scanpath"],
+  ["raw", "Raw gaze"],
+];
 
 interface AnalysedRecording {
   recording: Recording;
@@ -44,7 +52,7 @@ export async function renderResults(
   let drawingAoi = false;
 
   const stage = el("div", { class: "results-stage" });
-  const overlay = el("canvas", { class: "results-overlay" });
+  const overlay = el("canvas", { class: "results-overlay", role: "img" });
   const aoiLayer = el("div", { class: "aoi-layer" });
   let stimulusImage: HTMLImageElement | null = null;
   let objectUrl: string | null = null;
@@ -99,28 +107,45 @@ export async function renderResults(
         el("p", { class: "muted" }, "Run a session from the study list to collect data.")
       )
     );
+    // The stage is the primary surface, so it explains its own emptiness
+    // rather than leaving that to the sidebar.
+    stage.append(
+      el(
+        "div",
+        { class: "stage-empty" },
+        el("p", {}, "No recordings yet — run a session to see attention here.")
+      )
+    );
     return;
   }
 
   if (stimulusImage && !stimulusImage.complete) {
-    await new Promise<void>((resolve) =>
-      stimulusImage!.addEventListener("load", () => resolve(), { once: true })
-    );
+    const img = stimulusImage;
+    await new Promise<void>((resolve) => img.addEventListener("load", () => resolve(), { once: true }));
   }
+
+  const fixationsOf = (recording: Recording): Fixation[] => {
+    const rect = recording.quality.stimulusRect;
+    const width = rect.width || recording.quality.viewportWidth || 1280;
+    const height = rect.height || recording.quality.viewportHeight || 720;
+
+    // Detect in the pixel space the participant actually saw, then normalise.
+    const pxPoints = recording.points.map((p) => ({ x: p.x * width, y: p.y * height, t: p.t }));
+    return detectFixations(pxPoints, {
+      dispersion: Math.max(30, Math.min(width, height) * 0.045),
+      minDuration: 100,
+    }).map((f) => ({ ...f, x: f.x / width, y: f.y / height }));
+  };
+
+  // Fixation detection is the expensive pass and depends only on the
+  // recording, so it runs once per recording and is cached. AOI edits — a new
+  // box, a rename, a delete — re-run only the cheap analyseAois pass over
+  // these cached fixations.
+  const fixationsById = new Map(recordings.map((r) => [r.id, fixationsOf(r)] as const));
 
   const analyse = (): AnalysedRecording[] =>
     recordings.map((recording) => {
-      const rect = recording.quality.stimulusRect;
-      const width = rect.width || recording.quality.viewportWidth || 1280;
-      const height = rect.height || recording.quality.viewportHeight || 720;
-
-      // Detect in the pixel space the participant actually saw, then normalise.
-      const pxPoints = recording.points.map((p) => ({ x: p.x * width, y: p.y * height, t: p.t }));
-      const fixations = detectFixations(pxPoints, {
-        dispersion: Math.max(30, Math.min(width, height) * 0.045),
-        minDuration: 100,
-      }).map((f) => ({ ...f, x: f.x / width, y: f.y / height }));
-
+      const fixations = fixationsById.get(recording.id) ?? [];
       return {
         recording,
         fixations,
@@ -151,6 +176,9 @@ export async function renderResults(
     aoiLayer.style.width = overlay.style.width;
     aoiLayer.style.height = overlay.style.height;
 
+    const modeLabel = VIEW_MODES.find(([value]) => value === mode)?.[1] ?? mode;
+    overlay.setAttribute("aria-label", `${modeLabel} overlay`);
+
     const set = activeSet();
 
     if (mode === "scanpath") {
@@ -167,17 +195,19 @@ export async function renderResults(
       renderHeatmap(overlay, points, { style: mode, radiusRatio: 0.055 });
     }
 
-    renderAoiBoxes(aoiLayer, aois, () => {
-      persistAois();
-      analysed = analyse();
-      void draw();
-      renderSidebar();
-    });
+    renderAoiBoxes(aoiLayer, aois, onAoiChange);
   };
 
   const persistAois = (): void => {
     study.aois = aois;
     void saveStudy(study);
+  };
+
+  const onAoiChange = (): void => {
+    persistAois();
+    analysed = analyse();
+    void draw();
+    renderSidebar();
   };
 
   // --- AOI drawing -------------------------------------------------------
@@ -225,12 +255,9 @@ export async function renderResults(
         width,
         height,
       });
-      persistAois();
-      analysed = analyse();
       drawingAoi = false;
       aoiLayer.classList.remove("is-drawing");
-      void draw();
-      renderSidebar();
+      onAoiChange();
     };
 
     aoiLayer.addEventListener("pointermove", onMove);
@@ -244,27 +271,28 @@ export async function renderResults(
   // --- Sidebar -----------------------------------------------------------
 
   function renderSidebar(): void {
-    clear(sidebar);
+    // Rebuilding destroys whatever control held keyboard focus, which would
+    // drop focus to <body> and force a Tab journey from the top after every
+    // interaction. Controls carry a data-key so focus can be handed back to
+    // the rebuilt equivalent.
+    const active = document.activeElement as HTMLElement | null;
+    const focusKey = active && sidebar.contains(active) ? active.dataset.key : undefined;
 
-    const modes: Array<[ViewMode, string]> = [
-      ["heat", "Heatmap"],
-      ["spotlight", "Spotlight"],
-      ["contour", "Contours"],
-      ["scanpath", "Scanpath"],
-      ["raw", "Raw gaze"],
-    ];
+    clear(sidebar);
 
     sidebar.append(
       el("h3", {}, "View"),
       el(
         "div",
-        { class: "segmented" },
-        ...modes.map(([value, label]) =>
+        { class: "segmented", role: "group", "aria-label": "View mode" },
+        ...VIEW_MODES.map(([value, label]) =>
           el(
             "button",
             {
               class: `seg ${mode === value ? "is-active" : ""}`,
               type: "button",
+              "aria-pressed": mode === value ? "true" : "false",
+              "data-key": `view-${value}`,
               onclick: () => {
                 mode = value;
                 void draw();
@@ -281,6 +309,8 @@ export async function renderResults(
       "select",
       {
         class: "input",
+        id: "participant-filter",
+        "data-key": "participants",
         onchange: (event: Event) => {
           selected = (event.target as HTMLSelectElement).value;
           void draw();
@@ -298,7 +328,10 @@ export async function renderResults(
     );
     participantSelect.value = selected;
 
-    sidebar.append(el("h3", {}, "Participants"), participantSelect);
+    sidebar.append(
+      el("h3", {}, el("label", { for: "participant-filter" }, "Participants")),
+      participantSelect
+    );
 
     if (mode === "scanpath" && selected === "all" && analysed.length > 1) {
       sidebar.append(
@@ -343,6 +376,8 @@ export async function renderResults(
         {
           class: `btn btn-small ${drawingAoi ? "is-active" : ""}`,
           type: "button",
+          "aria-pressed": drawingAoi ? "true" : "false",
+          "data-key": "aoi-draw",
           onclick: () => {
             drawingAoi = !drawingAoi;
             aoiLayer.classList.toggle("is-drawing", drawingAoi);
@@ -391,13 +426,17 @@ export async function renderResults(
                 el("input", {
                   class: "inline-input",
                   value: agg.label,
+                  "aria-label": "Region name",
+                  "data-key": `aoi-name-${agg.aoiId}`,
                   onchange: (event: Event) => {
                     const aoi = aois.find((a) => a.id === agg.aoiId);
                     if (aoi) {
                       aoi.label = (event.target as HTMLInputElement).value;
                       persistAois();
                       analysed = analyse();
-                      void draw();
+                      // A rename moves no gaze: refresh the on-stage box
+                      // labels and skip the heatmap repaint entirely.
+                      renderAoiBoxes(aoiLayer, aois, onAoiChange);
                     }
                   },
                 })
@@ -427,6 +466,7 @@ export async function renderResults(
           {
             class: "btn btn-small",
             type: "button",
+            "data-key": "export-png",
             onclick: () => void exportOverlayPng(study, stimulusImage, overlay, mode),
           },
           "PNG overlay"
@@ -436,6 +476,7 @@ export async function renderResults(
           {
             class: "btn btn-small",
             type: "button",
+            "data-key": "export-fixations",
             onclick: () =>
               exportFixationsCsv(
                 study,
@@ -452,6 +493,7 @@ export async function renderResults(
           {
             class: "btn btn-small",
             type: "button",
+            "data-key": "export-raw",
             onclick: () => exportRawCsv(study, recordings),
           },
           "Raw CSV"
@@ -461,6 +503,7 @@ export async function renderResults(
           {
             class: "btn btn-small",
             type: "button",
+            "data-key": "export-aoi",
             onclick: () =>
               exportAoiCsv(
                 study,
@@ -481,6 +524,7 @@ export async function renderResults(
           {
             class: "btn btn-small",
             type: "button",
+            "data-key": "export-json",
             onclick: () => exportStudyJson(study, recordings),
           },
           "Session JSON"
@@ -508,39 +552,53 @@ export async function renderResults(
                 ` ${a.fixations.length} fixations · ${formatPercent(a.recording.quality.trackingRatio)} tracked`
               )
             ),
-            el(
-              "button",
-              {
-                class: "btn btn-ghost btn-small",
-                type: "button",
-                onclick: async () => {
-                  await deleteRecording(a.recording.id);
-                  const index = recordings.findIndex((r) => r.id === a.recording.id);
-                  if (index >= 0) recordings.splice(index, 1);
-                  analysed = analyse();
-                  if (selected === a.recording.id) selected = "all";
-                  void draw();
-                  renderSidebar();
-                },
-              },
-              "Delete"
-            )
+            recordingDeleteButton(a.recording)
           )
         )
       )
     );
+
+    if (focusKey) {
+      sidebar.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
+    }
+  }
+
+  function recordingDeleteButton(recording: Recording): HTMLButtonElement {
+    // A recorded session cannot be re-recorded, so this is the one place a
+    // single mis-click could destroy a participant's time.
+    const btn = confirmButton("Delete", "Really delete?", async () => {
+      await deleteRecording(recording.id);
+      const index = recordings.findIndex((r) => r.id === recording.id);
+      if (index >= 0) recordings.splice(index, 1);
+      fixationsById.delete(recording.id);
+      analysed = analyse();
+      if (selected === recording.id) selected = "all";
+      void draw();
+      renderSidebar();
+    });
+    btn.setAttribute("aria-label", `Delete ${recording.participant}'s recording`);
+    btn.dataset.key = `delete-${recording.id}`;
+    return btn;
   }
 
   renderSidebar();
   await draw();
 
-  const onResize = () => void draw();
+  // Live resizes fire many events per second, and each full redraw re-splats
+  // the entire heatmap. A trailing-edge debounce redraws once when the drag
+  // settles; in the interim the CSS-sized canvas simply stretches.
+  let resizeTimer = 0;
+  const onResize = () => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => void draw(), 150);
+  };
   window.addEventListener("resize", onResize);
 
   // The caller replaces the host contents on navigation; clean up after it.
   const observer = new MutationObserver(() => {
     if (!host.isConnected || !stage.isConnected) {
       window.removeEventListener("resize", onResize);
+      window.clearTimeout(resizeTimer);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       observer.disconnect();
     }
@@ -562,13 +620,16 @@ function renderRawPoints(canvas: HTMLCanvasElement, recordings: Recording[]): vo
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // fillRect rather than one beginPath/arc/fill per sample: a minute of gaze
+  // is ~1800 dots per participant, and at this size square dots are
+  // indistinguishable from round ones while keeping the per-dot alpha
+  // build-up that makes dense clusters read darker.
+  const size = 5;
   recordings.forEach((recording, index) => {
     const hue = (index * 67) % 360;
     ctx.fillStyle = `hsla(${hue}, 90%, 60%, 0.35)`;
     for (const p of recording.points) {
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillRect(p.x * canvas.width - size / 2, p.y * canvas.height - size / 2, size, size);
     }
   });
 }
@@ -589,6 +650,7 @@ function renderAoiBoxes(layer: HTMLElement, aois: Aoi[], onChange: () => void): 
           class: "aoi-remove",
           type: "button",
           title: "Remove region",
+          "aria-label": `Remove region ${aoi.label}`,
           onclick: (event: Event) => {
             event.stopPropagation();
             const index = aois.findIndex((a) => a.id === aoi.id);

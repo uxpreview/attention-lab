@@ -15,8 +15,6 @@ export function el<K extends keyof HTMLElementTagNameMap>(
       node.addEventListener(key.replace(/^on/, "").toLowerCase(), value as EventListener);
     } else if (key === "class") {
       node.className = String(value);
-    } else if (key === "html") {
-      node.innerHTML = String(value);
     } else if (value === false || value === null || value === undefined) {
       continue;
     } else if (value === true) {
@@ -36,6 +34,54 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 
 export function clear(node: HTMLElement): void {
   while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+/**
+ * Makes every sibling of a full-screen overlay inert while it is up. The
+ * screen underneath stays in the DOM, and without this Tab still reaches its
+ * buttons and a screen reader still reads straight through the overlay.
+ * Returns a restore function; anything already inert is left alone.
+ */
+export function inertSiblings(host: HTMLElement, overlay: HTMLElement): () => void {
+  const covered = Array.from(host.children).filter(
+    (node): node is HTMLElement =>
+      node instanceof HTMLElement && node !== overlay && !node.hasAttribute("inert")
+  );
+  for (const node of covered) node.setAttribute("inert", "");
+  return () => {
+    for (const node of covered) node.removeAttribute("inert");
+  };
+}
+
+/**
+ * A two-step destructive button: the first press arms it, a second press
+ * within three seconds fires. Everything in this app lives in one browser's
+ * storage, so deletion has no server copy and no undo — nothing destructive
+ * should fire on a single click, and a native confirm() would break the
+ * page's voice to ask.
+ */
+export function confirmButton(
+  label: string,
+  armedLabel: string,
+  onConfirm: () => void,
+  className = "btn btn-ghost btn-small"
+): HTMLButtonElement {
+  const btn = el("button", { class: className, type: "button" }, label);
+  let disarm = 0;
+  btn.addEventListener("click", () => {
+    if (btn.classList.contains("is-active")) {
+      window.clearTimeout(disarm);
+      onConfirm();
+      return;
+    }
+    btn.classList.add("is-active");
+    btn.textContent = armedLabel;
+    disarm = window.setTimeout(() => {
+      btn.classList.remove("is-active");
+      btn.textContent = label;
+    }, 3000);
+  });
+  return btn;
 }
 
 export function formatMs(ms: number): string {

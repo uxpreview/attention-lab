@@ -174,7 +174,7 @@ export function readFaceState(
   videoWidth: number,
   videoHeight: number
 ): FaceState | null {
-  const landmarks = result.faceLandmarks?.[0] as Landmark[] | undefined;
+  const landmarks: Landmark[] | undefined = result.faceLandmarks?.[0];
   // Fewer than 478 points means the iris refinement is missing, and without
   // irises there is no gaze signal to extract.
   if (!landmarks || landmarks.length < 478) return null;
@@ -200,9 +200,7 @@ export function readFaceState(
     aspect
   );
 
-  const { yaw, pitch, roll } = headPose(result.facialTransformationMatrixes?.[0]?.data as
-    | number[]
-    | undefined);
+  const { yaw, pitch, roll } = headPose(result.facialTransformationMatrixes?.[0]?.data);
 
   const nose = landmarks[NOSE_TIP];
   const scale = dist(landmarks[LEFT_EYE_OUTER], landmarks[RIGHT_EYE_OUTER]);

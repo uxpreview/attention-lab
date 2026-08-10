@@ -1,5 +1,5 @@
 import type { CalibrationSample, GazeEngine } from "../tracker/gaze";
-import { el, sleep } from "./dom";
+import { el, inertSiblings, sleep } from "./dom";
 
 /**
  * Calibration and validation flow.
@@ -36,46 +36,69 @@ export interface CalibrationOutcome {
   cancelled: boolean;
   /** Mean validation error in CSS pixels, or null if validation was skipped. */
   validationError: number | null;
-  /** Per-point validation errors, for the quality readout. */
-  pointErrors: number[];
 }
 
 export async function runCalibration(
   engine: GazeEngine,
   host: HTMLElement
 ): Promise<CalibrationOutcome> {
-  const overlay = el("div", { class: "calib-overlay" });
-  const instruction = el(
-    "div",
-    { class: "calib-instruction" },
-    el("h2", {}, "Calibration"),
-    el(
-      "p",
-      {},
-      "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until it stops pulsing."
-    ),
-    el("p", { class: "calib-progress" }, `0 / ${CALIBRATION_POINTS.length}`)
+  const overlay = el("div", {
+    class: "calib-overlay",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": "Calibration",
+    tabindex: "-1",
+  });
+  const heading = el("h2", {}, "Calibration");
+  const guidance = el(
+    "p",
+    {},
+    "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until it stops pulsing. Esc cancels."
   );
-  const dot = el("button", { class: "calib-dot", type: "button" });
-  overlay.append(instruction, dot);
+  const instruction = el("div", { class: "calib-instruction" }, heading, guidance);
+  // The counter lives outside the instruction block: the instructions dim
+  // after the first dot, and progress is the one thing that has to stay
+  // visible for all eighteen clicks — it is what buys participant patience.
+  const progress = el("p", { class: "calib-progress", role: "status" });
+  const dot = el("button", { class: "calib-dot", type: "button", "aria-label": "Calibration point" });
+  const cancelBtn = el(
+    "button",
+    { class: "btn btn-ghost btn-small calib-cancel", type: "button" },
+    "Cancel"
+  );
+  overlay.append(instruction, progress, dot, cancelBtn);
   host.append(overlay);
 
-  const progress = instruction.querySelector(".calib-progress") as HTMLElement;
+  const restoreBackground = inertSiblings(host, overlay);
+  overlay.focus();
+
   const samples: CalibrationSample[] = [];
   let cancelled = false;
 
+  // One cancellation path for the Escape key and the on-screen button: both
+  // abort whatever wait is in flight, and the loops check the flag between
+  // points.
+  const abort = new AbortController();
+  const cancel = () => {
+    cancelled = true;
+    abort.abort();
+  };
   const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape") cancelled = true;
+    if (event.key === "Escape") cancel();
   };
   window.addEventListener("keydown", onKey);
+  cancelBtn.addEventListener("click", cancel);
 
   try {
     for (let i = 0; i < CALIBRATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = CALIBRATION_POINTS[i];
-      progress.textContent = `${i} / ${CALIBRATION_POINTS.length}`;
-      const collected = await collectAtPoint(engine, dot, nx, ny, samples);
-      if (!collected) {
+      progress.textContent = `${i + 1} / ${CALIBRATION_POINTS.length}`;
+      let collected: CollectResult;
+      do {
+        collected = await collectAtPoint(engine, dot, nx, ny, samples, abort.signal);
+      } while (collected === "retry");
+      if (collected === "abandoned") {
         cancelled = true;
         break;
       }
@@ -84,22 +107,24 @@ export async function runCalibration(
       if (i === 0) instruction.classList.add("is-dim");
     }
 
-    if (cancelled) return { cancelled: true, validationError: null, pointErrors: [] };
+    if (cancelled) return { cancelled: true, validationError: null };
 
     progress.textContent = "Fitting model…";
     engine.calibrate(samples);
 
     instruction.classList.remove("is-dim");
-    (instruction.querySelector("h2") as HTMLElement).textContent = "Accuracy check";
-    (instruction.querySelector("p") as HTMLElement).textContent =
-      "Five more dots. These measure how accurate the calibration actually is.";
+    heading.textContent = "Accuracy check";
+    guidance.textContent = "Five more dots. These measure how accurate the calibration actually is.";
 
     const pointErrors: number[] = [];
     for (let i = 0; i < VALIDATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = VALIDATION_POINTS[i];
-      progress.textContent = `${i} / ${VALIDATION_POINTS.length}`;
-      const error = await measureAtPoint(engine, dot, nx, ny);
+      progress.textContent = `${i + 1} / ${VALIDATION_POINTS.length}`;
+      let error: number | "retry" | null;
+      do {
+        error = await measureAtPoint(engine, dot, nx, ny, abort.signal);
+      } while (error === "retry");
       if (error === null) {
         cancelled = true;
         break;
@@ -109,14 +134,15 @@ export async function runCalibration(
     }
 
     if (cancelled || pointErrors.length === 0) {
-      return { cancelled, validationError: null, pointErrors };
+      return { cancelled, validationError: null };
     }
 
     const mean = pointErrors.reduce((a, b) => a + b, 0) / pointErrors.length;
-    return { cancelled: false, validationError: mean, pointErrors };
+    return { cancelled: false, validationError: mean };
   } finally {
     window.removeEventListener("keydown", onKey);
     engine.stopCollecting();
+    restoreBackground();
     overlay.remove();
   }
 }
@@ -129,55 +155,90 @@ function placeDot(dot: HTMLElement, nx: number, ny: number): { x: number; y: num
   return { x, y };
 }
 
-/** Resolves false if the participant abandoned the point (window blur, escape). */
+type CollectResult = "ok" | "retry" | "abandoned";
+
+/**
+ * Collects dwell samples at one dot. Resolves "retry" if the window lost
+ * focus mid-dwell — a notification or an alt-tab takes the eyes with it, and
+ * samples collected anyway would fold silently into the model as a
+ * consistent, invisible bias — so that point's samples are discarded and the
+ * same dot is presented again. Resolves "abandoned" on cancel.
+ */
 async function collectAtPoint(
   engine: GazeEngine,
   dot: HTMLButtonElement,
   nx: number,
   ny: number,
-  into: CalibrationSample[]
-): Promise<boolean> {
+  into: CalibrationSample[],
+  signal: AbortSignal
+): Promise<CollectResult> {
   const { x, y } = placeDot(dot, nx, ny);
   dot.classList.remove("is-active");
 
-  const clicked = await waitForClick(dot);
-  if (!clicked) return false;
+  const clicked = await waitForClick(dot, signal);
+  if (!clicked) return "abandoned";
 
   dot.classList.add("is-active");
-  await sleep(SETTLE_MS);
 
+  let blurred = false;
+  const onBlur = () => {
+    blurred = true;
+  };
+  window.addEventListener("blur", onBlur);
+  const before = into.length;
+
+  await sleep(SETTLE_MS);
   engine.startCollecting(x, y, into);
   await sleep(DWELL_MS);
   engine.stopCollecting();
 
+  window.removeEventListener("blur", onBlur);
   dot.classList.remove("is-active");
-  return true;
+
+  if (signal.aborted) return "abandoned";
+  if (blurred) {
+    into.length = before;
+    return "retry";
+  }
+  return "ok";
 }
 
-/** Returns the mean gaze error at this point in pixels, or null if abandoned. */
+/** Returns the median gaze error at this point in pixels, "retry" if focus
+ * was lost mid-dwell (same reasoning as collection), or null if abandoned. */
 async function measureAtPoint(
   engine: GazeEngine,
   dot: HTMLButtonElement,
   nx: number,
-  ny: number
-): Promise<number | null> {
+  ny: number,
+  signal: AbortSignal
+): Promise<number | "retry" | null> {
   const { x, y } = placeDot(dot, nx, ny);
   dot.classList.remove("is-active");
 
-  const clicked = await waitForClick(dot);
+  const clicked = await waitForClick(dot, signal);
   if (!clicked) return null;
 
   dot.classList.add("is-active");
-  await sleep(SETTLE_MS);
 
+  let blurred = false;
+  const onBlur = () => {
+    blurred = true;
+  };
+  window.addEventListener("blur", onBlur);
+
+  await sleep(SETTLE_MS);
   const errors: number[] = [];
   const off = engine.onGaze((sample) => {
     errors.push(Math.hypot(sample.x - x, sample.y - y));
   });
   await sleep(DWELL_MS);
   off();
+
+  window.removeEventListener("blur", onBlur);
   dot.classList.remove("is-active");
 
+  if (signal.aborted) return null;
+  if (blurred) return "retry";
   if (errors.length === 0) return Infinity;
   // Median rather than mean: a single blink-adjacent outlier should not decide
   // whether we tell the researcher their calibration is good.
@@ -185,24 +246,26 @@ async function measureAtPoint(
   return errors[Math.floor(errors.length / 2)];
 }
 
-function waitForClick(dot: HTMLButtonElement): Promise<boolean> {
+function waitForClick(dot: HTMLButtonElement, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
     const onClick = () => {
       cleanup();
       resolve(true);
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        cleanup();
-        resolve(false);
-      }
+    const onAbort = () => {
+      cleanup();
+      resolve(false);
     };
     const cleanup = () => {
       dot.removeEventListener("click", onClick);
-      window.removeEventListener("keydown", onKey);
+      signal.removeEventListener("abort", onAbort);
     };
     dot.addEventListener("click", onClick);
-    window.addEventListener("keydown", onKey);
+    signal.addEventListener("abort", onAbort);
   });
 }
 

@@ -3,16 +3,33 @@ import "./styles.css";
 import { deleteStudy, listStudies, newId, saveStudy } from "./data/store";
 import { normaliseStimulusUrl } from "./data/stimulusUrl";
 import type { Study } from "./data/types";
-import { FEATURE_BASIS_VERSION } from "./tracker/features";
+import { FEATURE_BASIS_VERSION, FEATURE_DIM } from "./tracker/features";
 import { GazeEngine } from "./tracker/gaze";
-import { deserialiseModel, serialiseModel } from "./tracker/regression";
+import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/regression";
 import { describeAccuracy, runCalibration } from "./ui/calibration";
-import { clear, el } from "./ui/dom";
+import { clear, confirmButton, el } from "./ui/dom";
 import { runRecording } from "./ui/record";
 import { renderResults } from "./ui/results";
 
-const app = document.getElementById("app") as HTMLElement;
+const app = mountPoint("app");
+
+/** Fails loudly at startup if index.html and this module disagree about the
+ * mount point, instead of casting the null away and crashing later. */
+function mountPoint(id: string): HTMLElement {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`index.html no longer has the #${id} mount point this module renders into`);
+  return node;
+}
+
 const engine = new GazeEngine();
+
+/** The active session's status-listener unsubscribe. Torn down in
+ * showStudyList alongside engine.stop(), because the study list is the one
+ * screen every abandoned session — back button, cancelled calibration —
+ * funnels through. A listener left behind would fire on every frame of the
+ * next session, writing into the dead session's detached DOM and keeping it
+ * out of GC's reach. */
+let releaseStatusListener: (() => void) | null = null;
 
 /** Calibration is per-person, but a repeat participant in the same sitting can
  * reuse theirs. Session storage, not local: a stale calibration from yesterday
@@ -34,8 +51,23 @@ function loadStoredCalibration(): StoredCalibration | null {
   try {
     const raw = sessionStorage.getItem(CALIBRATION_KEY);
     if (!raw) return null;
-    const stored = JSON.parse(raw) as StoredCalibration;
-    return stored.basis === FEATURE_BASIS_VERSION ? stored : null;
+    // Storage is an untrusted boundary: the cast below is only honest because
+    // every field is checked first. The basis version catches a model fit on
+    // an older feature set; the shape check catches everything else. A bad
+    // payload means a fresh calibration is offered, never a silently wrong one.
+    const stored: unknown = JSON.parse(raw);
+    if (typeof stored !== "object" || stored === null) return null;
+    const candidate = stored as Partial<StoredCalibration>;
+    if (
+      candidate.basis !== FEATURE_BASIS_VERSION ||
+      !isSerialisedModel(candidate.model, FEATURE_DIM) ||
+      (candidate.validationError !== null && typeof candidate.validationError !== "number") ||
+      typeof candidate.savedAt !== "number" ||
+      typeof candidate.participant !== "string"
+    ) {
+      return null;
+    }
+    return candidate as StoredCalibration;
   } catch {
     return null;
   }
@@ -134,14 +166,23 @@ function experimentHead(): HTMLElement {
 
 // --- Study list ----------------------------------------------------------
 
+/** The study being edited, if the list was re-rendered from an Edit button.
+ * Consumed by the next render: the form opens pre-filled, then the flag
+ * clears so navigation elsewhere returns the form to create mode. */
+let editingStudy: Study | null = null;
+
 async function showStudyList(): Promise<void> {
   // The study list is the one screen that never needs the camera, so releasing
   // it here covers every way of leaving a session — including abandoning
   // calibration, where nothing else would turn the camera light off.
   engine.stop();
+  releaseStatusListener?.();
+  releaseStatusListener = null;
 
   clear(app);
   const studies = await listStudies();
+  const editing = editingStudy;
+  editingStudy = null;
 
   const header = experimentHead();
 
@@ -158,7 +199,7 @@ async function showStudyList(): Promise<void> {
           { class: "muted" },
           isHandheld()
             ? "Nothing has been recorded in this browser. Results of a session run on another machine stay on that machine."
-            : "Add a wireframe or a URL to start collecting attention data."
+            : "Use the form above to add a wireframe or a URL — every session you run will collect here."
         )
       )
     );
@@ -181,7 +222,7 @@ async function showStudyList(): Promise<void> {
       "div",
       { class: "container" },
       handheldNotice(),
-      isHandheld() ? null : newStudyForm(),
+      isHandheld() ? null : newStudyForm(editing),
       list
     )
   );
@@ -237,9 +278,15 @@ function studyCard(study: Study): HTMLElement {
   const thumb = el("div", { class: "study-thumb" });
   if (study.stimulus.kind === "image") {
     const url = URL.createObjectURL(study.stimulus.blob);
-    thumb.append(el("img", { src: url, alt: "" }));
-    // Card lifetime is the screen's lifetime; release when it leaves the DOM.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    const img = el("img", { alt: "" });
+    // The blob is only needed until the image decodes; revoking on load (or
+    // error, so a broken blob does not pin its URL forever) releases it
+    // without guessing at the card's lifetime. Same pattern as
+    // readImageDimensions below.
+    img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+    img.addEventListener("error", () => URL.revokeObjectURL(url), { once: true });
+    img.src = url;
+    thumb.append(img);
   } else {
     thumb.append(el("span", { class: "study-thumb-url" }, "URL"));
   }
@@ -299,33 +346,64 @@ function studyCard(study: Study): HTMLElement {
         {
           class: "btn btn-ghost btn-small",
           type: "button",
-          onclick: async () => {
-            if (!confirm(`Delete "${study.name}" and all of its recordings?`)) return;
-            await deleteStudy(study.id);
+          onclick: () => {
+            // Recordings are irreplaceable participant time, so a typo in a
+            // name or task must never cost a delete-and-recreate.
+            editingStudy = study;
             void showStudyList();
           },
         },
-        "Delete"
-      )
+        "Edit"
+      ),
+      studyDeleteButton(study)
     )
   );
 }
 
-function newStudyForm(): HTMLElement {
-  const nameInput = el("input", { class: "input", placeholder: "Checkout wireframe v3" });
+function studyDeleteButton(study: Study): HTMLButtonElement {
+  const btn = confirmButton("Delete", "Really delete?", async () => {
+    await deleteStudy(study.id);
+    void showStudyList();
+  });
+  btn.setAttribute("aria-label", `Delete study ${study.name} and all of its recordings`);
+  return btn;
+}
+
+/** The study form: creates when `existing` is null, edits it otherwise.
+ * Editing keeps the study's id, recordings and regions; an image stimulus
+ * stays locked because every recording is normalised against it. */
+function newStudyForm(existing: Study | null = null): HTMLElement {
+  const lockedImage = existing !== null && existing.stimulus.kind === "image";
+
+  const nameInput = el("input", {
+    class: "input",
+    placeholder: "Checkout wireframe v3",
+    value: existing?.name ?? "",
+  });
   const taskInput = el("input", {
     class: "input",
     placeholder: "Find where you would enter a discount code",
+    value: existing?.task ?? "",
   });
-  const urlInput = el("input", { class: "input", placeholder: "https://example.com" });
-  const durationInput = el("input", { class: "input", type: "number", value: "15", min: "0" });
+  const urlInput = el("input", {
+    class: "input",
+    placeholder: "https://example.com",
+    value: existing?.stimulus.kind === "url" ? existing.stimulus.url : "",
+  });
+  const durationInput = el("input", {
+    class: "input",
+    type: "number",
+    value: existing ? String(existing.duration) : "15",
+    min: "0",
+  });
   const fileInput = el("input", { class: "file-input", type: "file", accept: "image/*" });
 
+  const dropTitle = el("span", { class: "drop-title" }, "Drop a wireframe or screenshot");
   const dropZone = el(
     "label",
     { class: "drop-zone" },
     fileInput,
-    el("span", { class: "drop-title" }, "Drop a wireframe or screenshot"),
+    dropTitle,
     el("span", { class: "muted" }, "PNG or JPG · or use a URL below")
   );
 
@@ -333,8 +411,11 @@ function newStudyForm(): HTMLElement {
   const setFile = (next: File | null) => {
     file = next;
     dropZone.classList.toggle("has-file", next !== null);
-    const title = dropZone.querySelector(".drop-title") as HTMLElement;
-    title.textContent = next ? next.name : "Drop a wireframe or screenshot";
+    dropTitle.textContent = next ? next.name : "Drop a wireframe or screenshot";
+    // The uploaded image wins over the URL field. Saying so — and parking the
+    // field — beats silently ignoring whatever was typed there.
+    urlInput.disabled = next !== null;
+    urlInput.placeholder = next ? "Using the uploaded image" : "https://example.com";
   };
 
   fileInput.addEventListener("change", () => setFile(fileInput.files?.[0] ?? null));
@@ -361,13 +442,15 @@ function newStudyForm(): HTMLElement {
       error.textContent = "Give the study a name.";
       return;
     }
-    if (!file && !url) {
+    if (!existing && !file && !url) {
       error.textContent = "Add an image or a URL to look at.";
       return;
     }
 
     let stimulus: Study["stimulus"];
-    if (file) {
+    if (lockedImage) {
+      stimulus = existing.stimulus;
+    } else if (file) {
       const dimensions = await readImageDimensions(file);
       stimulus = {
         kind: "image",
@@ -377,6 +460,10 @@ function newStudyForm(): HTMLElement {
         name: file.name,
       };
     } else {
+      if (!url) {
+        error.textContent = "Add a URL to look at.";
+        return;
+      }
       const resolved = normaliseStimulusUrl(url);
       if ("problem" in resolved) {
         error.textContent = resolved.problem;
@@ -386,12 +473,12 @@ function newStudyForm(): HTMLElement {
     }
 
     const study: Study = {
-      id: newId("study"),
+      id: existing?.id ?? newId("study"),
       name,
       task: taskInput.value.trim(),
       stimulus,
-      aois: [],
-      createdAt: Date.now(),
+      aois: existing?.aois ?? [],
+      createdAt: existing?.createdAt ?? Date.now(),
       duration: Math.max(0, Number(durationInput.value) || 0),
     };
 
@@ -399,30 +486,63 @@ function newStudyForm(): HTMLElement {
     void showStudyList();
   };
 
-  return el(
-    "section",
-    { class: "panel" },
+  const form = el(
+    "form",
+    {
+      class: "panel",
+      // A short form should submit on Enter; the button alone does not give
+      // the fields that behavior.
+      onsubmit: (event: Event) => {
+        event.preventDefault();
+        void submit();
+      },
+    },
     // The panel opens the way an experiment opens on the site: eyebrow, then
     // the claim in display type, then how to work it.
-    el("p", { class: "label eyebrow" }, "Upload · Task · Thirteen clicks"),
-    el("h2", { class: "t-display" }, "See where they actually looked."),
+    el(
+      "p",
+      { class: "label eyebrow" },
+      existing ? "Edit study" : "Upload · Task · Thirteen clicks"
+    ),
+    el(
+      "h2",
+      { class: "t-display" },
+      existing ? `Adjust “${existing.name}”.` : "See where they actually looked."
+    ),
     el(
       "p",
       { class: "panel-lede" },
-      "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser. Nothing you upload and no frame of video ever leaves this machine."
+      existing
+        ? lockedImage
+          ? "Name, task and duration are safe to change mid-study. The stimulus image stays locked: every existing recording is aligned to it."
+          : "Name, task, duration and the page URL can all change. Recordings already made keep the gaze they captured."
+        : "Add the screen you want tested and the task you want done. Running a session calibrates to whoever is sitting there, records them looking, and writes the result to this browser. Nothing you upload and no frame of video ever leaves this machine."
     ),
-    dropZone,
+    existing ? null : dropZone,
     el(
       "div",
       { class: "field-grid" },
       field("Study name", nameInput),
       field("Task prompt", taskInput),
-      field("Or a page URL", urlInput),
+      lockedImage ? null : field(existing ? "Page URL" : "Or a page URL", urlInput),
       field("Duration (seconds, 0 = manual)", durationInput)
     ),
     error,
-    el("button", { class: "btn btn-primary", type: "button", onclick: () => void submit() }, "Create study")
+    el(
+      "div",
+      { class: "form-actions" },
+      el("button", { class: "btn btn-primary", type: "submit" }, existing ? "Save changes" : "Create study"),
+      existing
+        ? el("button", { class: "btn btn-ghost", type: "button", onclick: () => void showStudyList() }, "Cancel")
+        : null
+    )
   );
+
+  // Editing arrives from a button further down the page; bring the form and
+  // its first field to the operator rather than making them scroll to it.
+  if (existing) queueMicrotask(() => nameInput.focus());
+
+  return form;
 }
 
 function field(label: string, input: HTMLElement): HTMLElement {
@@ -538,7 +658,9 @@ function stimulusCheck(study: Study): HTMLElement | null {
 async function runSession(study: Study): Promise<void> {
   clear(app);
 
-  const status = el("p", { class: "muted" }, "Starting camera…");
+  // role="status" makes this a polite live region: the camera states below are
+  // exactly what a non-sighted operator needs to hear to know it is working.
+  const status = el("p", { class: "muted", role: "status" }, "Starting camera…");
   const preview = el("div", { class: "camera-preview" }, engine.tracker.video);
   const stored = loadStoredCalibration();
 
@@ -548,6 +670,7 @@ async function runSession(study: Study): Promise<void> {
     value: stored?.participant ?? "",
   });
   const gazeDotToggle = el("input", { type: "checkbox" });
+  const actions = el("div", { class: "session-actions" });
 
   const panel = el(
     "section",
@@ -564,10 +687,9 @@ async function runSession(study: Study): Promise<void> {
       gazeDotToggle,
       el("span", {}, "Show live gaze dot (demo mode, distracting for real studies)")
     ),
-    el("div", { class: "session-actions" })
+    actions
   );
 
-  const actions = panel.querySelector(".session-actions") as HTMLElement;
   app.append(
     el(
       "div",
@@ -591,7 +713,7 @@ async function runSession(study: Study): Promise<void> {
     status.textContent = "This study's address cannot be loaded, so a session cannot run against it.";
     status.classList.add("error");
     // The rest of the session apparatus would only dress up a dead end.
-    panel.querySelector(".camera-preview")?.remove();
+    preview.remove();
     panel.querySelectorAll(".field, .checkbox").forEach((node) => node.remove());
     return;
   }
@@ -611,10 +733,16 @@ async function runSession(study: Study): Promise<void> {
 
   status.textContent = "Camera running. Sit about an arm's length away, square to the screen.";
 
-  const unsubscribe = engine.onStatus((s) => {
-    if (!s.faceVisible) {
+  // Only rewrite the live region when the state actually changes: updating on
+  // every frame would have a screen reader narrating the fps counter.
+  let statusCategory = "";
+  releaseStatusListener = engine.onStatus((s) => {
+    const category = !s.faceVisible ? "no-face" : !s.usable ? "unusable" : "tracking";
+    if (category === statusCategory) return;
+    statusCategory = category;
+    if (category === "no-face") {
       status.textContent = "No face detected. Check your lighting and framing.";
-    } else if (!s.usable) {
+    } else if (category === "unusable") {
       status.textContent = "Face detected, but turned too far or too close to the edge of frame.";
     } else {
       status.textContent = `Tracking at ${Math.round(s.fps)} fps. Ready to calibrate.`;
@@ -622,8 +750,11 @@ async function runSession(study: Study): Promise<void> {
   });
 
   const beginRecording = async (validationError: number | null) => {
-    unsubscribe();
-    const recording = await runRecording(app, {
+    // The recording screen has its own face-lost readout; this one would only
+    // talk over it.
+    releaseStatusListener?.();
+    releaseStatusListener = null;
+    const outcome = await runRecording(app, {
       study,
       engine,
       participant: participantInput.value.trim() || `P${Date.now().toString().slice(-4)}`,
@@ -631,17 +762,31 @@ async function runSession(study: Study): Promise<void> {
       showGazeDot: gazeDotToggle.checked,
     });
 
-    engine.stop();
-
-    if (recording) {
+    if (outcome.status === "saved") {
+      engine.stop();
       await renderResults(app, study, () => void showStudyList());
-    } else {
-      void showStudyList();
+      return;
     }
+
+    if (outcome.status === "empty") {
+      // The session ran to the end but no usable gaze arrived. Returning to
+      // the study list silently here would spend a participant with no
+      // explanation — say what happened, and keep the camera on so the
+      // operator can recalibrate immediately.
+      status.textContent =
+        "The recording captured no usable gaze, so nothing was saved. Check lighting and framing, then recalibrate.";
+      status.classList.add("error");
+      renderActions();
+      return;
+    }
+
+    engine.stop();
+    void showStudyList();
   };
 
   const calibrateThenRecord = async () => {
     clear(actions);
+    status.classList.remove("error");
     const outcome = await runCalibration(engine, app);
 
     if (outcome.cancelled) {
@@ -666,7 +811,7 @@ async function runSession(study: Study): Promise<void> {
     actions.append(
       el(
         "div",
-        { class: `accuracy accuracy-${accuracy.grade}` },
+        { class: `accuracy accuracy-${accuracy.grade}`, role: "status" },
         el("strong", {}, accuracy.label),
         el("p", { class: "muted" }, accuracy.detail)
       ),
