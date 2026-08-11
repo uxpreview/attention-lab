@@ -162,3 +162,97 @@ measurement. Question 4 is answered structurally but not empirically: the
 tracker asks for the GPU delegate and falls back to CPU on failure, and nobody
 has yet checked which branch a given machine takes or what it costs in frame
 rate.
+
+## 2026-08-11 — The heat landed below the button
+
+**Goal.** Chase a specific complaint from the deployed build: staring at a
+vermillion CTA in the top-right of a stimulus, the heatmap pooled below it. Not
+a vague "accuracy is unquantified" — a reproducible direction, on a real
+screen, with the app reporting ≈2.9° at the time.
+
+**Outcome.** The offset is not diagnosable from what the app records, and that
+turned out to be the finding. Three mechanisms could produce it, they want
+three different remedies, and the accuracy check throws away the one piece of
+evidence that tells them apart. It now keeps it.
+
+### Two hypotheses that died
+
+Worth writing down, because both were plausible enough to have been shipped on
+a hunch, and the simulated eye killed both in about ten minutes.
+
+**Ridge contraction.** Noisy predictors attenuate least-squares slopes toward
+zero — regression dilution — so the predicted gaze field contracts toward the
+calibration centroid, which is roughly screen centre. A target in a corner gets
+pulled inward. Measured on the synthetic eye, the effect is real and
+anisotropic: at heavy landmark noise the horizontal gain falls to 0.89 and the
+vertical to 0.74, because the vertical gaze signal is intrinsically weaker.
+Direction matches the complaint exactly.
+
+It is still not the fix. Restoring unit gain means dividing by that factor,
+which amplifies the noise by the same ratio, and the noise is the larger term:
+mean error went **192px → 269px**. Contraction is what least squares does on
+purpose, and undoing it costs more than it returns. Left alone.
+
+**A flattering validation statistic.** `measureAtPoint` looked like it was
+reporting the error of a heavily averaged estimate while a recording stores
+individual samples — which would have meant the reported degrees, the quality
+grading, *and* the heatmap kernel (`kernelRatio` takes the validation error as
+its sigma) were all sized off a number two or three times too good. It is not:
+it takes the median of per-sample *distances*, not the distance of the median
+residual. Those behave completely differently and the first is honest. Measured
+against per-sample error over the whole screen it lands within 1.04–1.09×. The
+first version of this entry claimed a 3× under-report; that was a misreading of
+one line, caught by re-running the probe against what the code actually does.
+
+### What was actually wrong
+
+Two things, and neither is the tracker.
+
+**The check discards its own evidence.** Five validation dots each measure a
+residual *vector*. `measureAtPoint` returned its magnitude, and the five
+magnitudes were averaged into one scalar. A rigid offset, a contracted field,
+and pure scatter all produce the same scalar and want three different
+responses — subtract it, widen the kernel, recalibrate. The vectors are now
+kept, `measureBias` splits them into a component-wise median offset and the
+scatter around it, and both are stored on the recording so a doubtful heatmap
+can be diagnosed after the fact instead of only re-run.
+
+**Reusing a calibration never re-measured it.** "Reuse calibration (12m old)"
+installed the stored model and went straight to recording, carrying forward the
+`validationError` from the sitting the model was fitted in. Nothing in that path
+could notice that the participant had shifted in their chair since — and a
+shifted participant *is* a constant offset, the exact fault that puts a
+correctly-shaped heat blob in the wrong place. It now runs the five dots first:
+five clicks rather than eighteen, and it both refreshes the reported number and
+measures the lean.
+
+A measured lean is subtracted, up to 320px. Past that it is not posture, it is a
+calibration that has stopped describing this participant, and the app says
+recalibrate rather than papering over it with an offset that would return
+plausible-looking gaze. On the synthetic eye, a participant who settles into
+their chair between calibrating and recording goes from 21px to 15px mean error
+after correction — and, unlike de-attenuation, subtracting a constant amplifies
+no noise at all.
+
+The reported error is recomputed per-sample against the corrected model rather
+than estimated from the summary numbers. The residual medians have already
+averaged away most of the scatter a recording carries, so subtracting the bias
+from *those* and calling the remainder the error would report a figure two or
+three times better than the gaze being stored — and that figure sizes the
+heatmap kernel. The raw per-sample offsets are kept per dot for exactly this.
+
+### Still open
+
+The original complaint is still not *explained*, only made diagnosable. The
+recording behind it predates all of this and carries no residuals, so which
+mechanism produced that particular offset cannot be recovered. The next session
+with a real participant now has the instrument: if the residuals come back
+pointing the same way, it was posture and it is already corrected; if they fan
+outward from centre, it is contraction and the honest response is a wider
+kernel, not a cleverer fit.
+
+Unchanged from the last entry: nothing has been run against a printed target
+grid at a fixed viewing distance, so the 2-4° claim remains unverified in the
+one way that would settle it. Open questions 2 (decay over a recording) and 4
+(GPU vs CPU delegate) are untouched — though the five-dot recheck is now the
+obvious way to answer 2, by running it after a recording as well as before.

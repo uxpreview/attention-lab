@@ -60,6 +60,12 @@ reconstructed from a normal webcam image:
 4. **Validation** — five more dots, off the calibration grid, measure real error
    on points the model never saw. This is reported before recording, because a
    bad calibration produces a confident-looking heatmap that is simply wrong.
+   The residual at each dot is kept as a vector, not a distance, which is what
+   lets the check separate a constant lean from scatter: the first moves every
+   gaze point the same way and can simply be subtracted, the second cannot.
+   A measured lean is corrected, and reusing a stored calibration re-runs these
+   five dots rather than trusting the number from the sitting it was fitted in.
+   (`src/tracker/regression.ts`, `measureBias`)
 5. **Smoothing** — a One Euro filter, which smooths hard while the eye is still
    and gets out of the way during saccades. A fixed low-pass filter has to
    choose between jitter and lag; this one does not.
