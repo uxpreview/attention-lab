@@ -4,11 +4,12 @@ import type { FaceLandmarkerResult } from "@mediapipe/tasks-vision";
  * Turns a face mesh into the feature vector the gaze regression consumes.
  *
  * The physics we are approximating: where you look is determined by where your
- * eyeballs point *plus* where your head is and which way it faces. Iris offset
- * alone works only if the head never moves, which no participant manages. So
- * the basis includes head pose and, crucially, interaction terms — a given iris
- * offset means a different screen position depending on head yaw, and that
- * coupling is multiplicative, not additive.
+ * eyeballs point *plus* where your head is, which way it faces, and how far
+ * back it sits. Iris offset alone works only if the head never moves, which no
+ * participant manages. So the basis includes head pose, viewing distance and,
+ * crucially, interaction terms — a given iris offset means a different screen
+ * position depending on head yaw and on how close the participant is leaning,
+ * and both couplings are multiplicative, not additive.
  */
 
 // Landmark indices in MediaPipe's 478-point refined mesh. "Left" and "right"
@@ -28,14 +29,14 @@ const CHIN = 152;
 const FOREHEAD = 10;
 
 /** Number of entries in the vector returned by {@link buildFeatureVector}. */
-export const FEATURE_DIM = 22;
+export const FEATURE_DIM = 25;
 
 /**
  * Bumped whenever the basis changes shape, order, or meaning. Persisted
  * calibrations carry this so an old model is invalidated rather than silently
  * applied to features it was never fit on.
  */
-export const FEATURE_BASIS_VERSION = 2;
+export const FEATURE_BASIS_VERSION = 3;
 
 /** Per-eye openness below which the lid is occluding the iris (blink). */
 export const BLINK_CLOSE_OPENNESS = 0.16;
@@ -69,7 +70,23 @@ export interface FaceState {
   /** Nose tip in normalised video coordinates: where the head sits in frame. */
   headX: number;
   headY: number;
-  /** Interocular distance in normalised units: a proxy for viewing distance. */
+  /**
+   * Outer-corner interocular distance as a fraction of the frame width.
+   *
+   * This is the viewing-distance signal: it grows as the face approaches the
+   * camera. Unnormalised on purpose — every ratio of two lengths on a face is
+   * distance-invariant, so dividing this by anything else on the face destroys
+   * exactly the information it is here to carry.
+   */
+  interocular: number;
+  /**
+   * Interocular distance over face height: apparent eye size, which is
+   * deliberately distance-*invariant*.
+   *
+   * It varies with pitch — a face tilted away foreshortens vertically and the
+   * ratio climbs — and between participants, so it is a useful pose and
+   * identity cue. It is not a distance cue, despite reading like one.
+   */
   scale: number;
   /** Mean eye openness across both eyes. */
   openness: number;
@@ -203,7 +220,7 @@ export function readFaceState(
   const { yaw, pitch, roll } = headPose(result.facialTransformationMatrixes?.[0]?.data);
 
   const nose = landmarks[NOSE_TIP];
-  const scale = dist(landmarks[LEFT_EYE_OUTER], landmarks[RIGHT_EYE_OUTER]);
+  const interocular = dist(landmarks[LEFT_EYE_OUTER], landmarks[RIGHT_EYE_OUTER]);
   const faceHeight = dist(landmarks[FOREHEAD], landmarks[CHIN]);
 
   return {
@@ -214,7 +231,8 @@ export function readFaceState(
     roll,
     headX: nose.x,
     headY: nose.y,
-    scale: faceHeight > 1e-6 ? scale / faceHeight : scale,
+    interocular,
+    scale: faceHeight > 1e-6 ? interocular / faceHeight : interocular,
     openness: (left.openness + right.openness) / 2,
   };
 }
@@ -263,6 +281,17 @@ export function buildFeatureVector(face: FaceState): number[] {
     dx * face.scale,
     dy * face.scale,
     face.yaw * face.pitch,
+    // Viewing distance, and the two terms that let it modulate gaze gain.
+    //
+    // Sitting closer means the same screen point sits at a wider angle, so the
+    // iris has to travel further to reach it — the gain from iris offset to
+    // screen position is a function of distance, and no amount of fitting on
+    // pose alone can stand in for it. Nothing else in this basis carries that:
+    // `scale` is a ratio of two face lengths, which is distance-invariant by
+    // construction, and so are the two interactions built on it.
+    face.interocular,
+    dx * face.interocular,
+    dy * face.interocular,
   ];
 }
 

@@ -144,15 +144,43 @@ function makeRandom(seed: number): () => number {
 const SCREEN_W = 1440;
 const SCREEN_H = 900;
 
+/** Nominal eye-to-screen distance, in screen-width units, at `dist` = 1. */
+const NOMINAL_VIEWING = 0.55;
+/** Outer-corner interocular width as a fraction of the frame, at `dist` = 1. */
+const NOMINAL_INTEROCULAR = 0.28;
+/** Forehead-to-chin height as a fraction of the frame, at `dist` = 1. */
+const NOMINAL_FACE_HEIGHT = 0.45;
+
+interface SimHead {
+  yaw: number;
+  pitch: number;
+  x: number;
+  y: number;
+  /**
+   * Viewing distance as a multiple of the calibration distance: 1 is where the
+   * participant calibrated, 0.7 is leaning a third of the way in.
+   *
+   * This is a property of where the participant *is*, not a landmark
+   * measurement, which is the whole point — the simulator computes the
+   * landmarks from it, and the tracker has to recover it.
+   */
+  dist: number;
+}
+
 /**
  * A forward model of an eye looking at a screen point, deliberately non-linear
- * and head-pose coupled, so it exercises the interaction terms rather than
- * flattering a purely linear fit.
+ * and coupled to both head pose and viewing distance, so it exercises the
+ * interaction terms rather than flattering a purely linear fit.
+ *
+ * Distance enters twice, and both are real geometry rather than decoration.
+ * Leaning in makes the screen subtend a wider angle, so the eye must rotate
+ * further to reach the same point; it also makes the whole face bigger in
+ * frame. A tracker that sees only the second one cannot correct for the first.
  */
 function simulateFace(
   targetX: number,
   targetY: number,
-  head: { yaw: number; pitch: number; x: number; y: number; scale: number },
+  head: SimHead,
   noise: number,
   rand: () => number
 ): FaceState {
@@ -161,12 +189,19 @@ function simulateFace(
   const sy = targetY / SCREEN_H - 0.5;
 
   // Eye rotation needed to hit that point, minus whatever the head already
-  // contributes — this is the coupling the model has to learn.
-  const eyeYaw = Math.atan2(sx * 0.6, 0.55) - head.yaw;
-  const eyePitch = Math.atan2(sy * 0.38, 0.55) - head.pitch;
+  // contributes — this is the coupling the model has to learn. The viewing
+  // distance is in the denominator: closer means a wider angle to the edges.
+  const eyeYaw = Math.atan2(sx * 0.6, NOMINAL_VIEWING * head.dist) - head.yaw;
+  const eyePitch = Math.atan2(sy * 0.38, NOMINAL_VIEWING * head.dist) - head.pitch;
 
-  // Iris offset is roughly sin of eye rotation, scaled by apparent eye size.
-  const gain = 0.42 / head.scale;
+  // Apparent face size grows as the participant approaches the camera. Both
+  // lengths scale together, which is exactly why their ratio cannot report
+  // distance and the raw interocular width can.
+  const interocular = NOMINAL_INTEROCULAR / head.dist;
+  const faceHeight = NOMINAL_FACE_HEIGHT / head.dist;
+
+  // Iris offset is roughly sin of eye rotation.
+  const gain = 0.42;
   const jitter = () => (rand() - 0.5) * noise;
   const offsetX = Math.sin(eyeYaw) * gain;
   const offsetY = Math.sin(eyePitch) * gain;
@@ -188,7 +223,8 @@ function simulateFace(
     roll: 0,
     headX: head.x,
     headY: head.y,
-    scale: head.scale,
+    interocular,
+    scale: interocular / faceHeight,
     openness: 0.32,
   };
 }
@@ -206,7 +242,18 @@ interface FitResult {
   model: ReturnType<typeof fitRidge>;
 }
 
-const BASE_HEAD = { yaw: 0.02, pitch: -0.03, x: 0.5, y: 0.48, scale: 0.62 };
+const BASE_HEAD = { yaw: 0.02, pitch: -0.03, x: 0.5, y: 0.48, dist: 1 };
+
+/**
+ * How much the participant's distance wanders during calibration, as a
+ * fraction: +/-3%, a few centimetres of breathing and settling over ninety
+ * seconds.
+ *
+ * Not zero, and that matters. The distance term can only be fitted from
+ * distance variation, so a calibration recorded at one perfectly fixed distance
+ * would leave that column constant and unlearnable. Real ones never are.
+ */
+const CALIBRATION_DIST_WOBBLE = 0.06;
 
 /** Simulates a full calibration run: bursts of frames per dot, with small
  * natural head movement throughout. */
@@ -225,7 +272,7 @@ function buildCalibrationData(
         pitch: BASE_HEAD.pitch + (rand() - 0.5) * 0.05,
         x: BASE_HEAD.x + (rand() - 0.5) * 0.02,
         y: BASE_HEAD.y + (rand() - 0.5) * 0.02,
-        scale: BASE_HEAD.scale + (rand() - 0.5) * 0.01,
+        dist: BASE_HEAD.dist + (rand() - 0.5) * CALIBRATION_DIST_WOBBLE,
       };
       const face = simulateFace(nx * SCREEN_W, ny * SCREEN_H, head, noise, rand);
       rows.push(buildFeatureVector(face));
@@ -239,10 +286,10 @@ function buildCalibrationData(
 
 /**
  * Runs a full calibrate-then-test cycle. `drift` simulates the participant's
- * head moving between calibration and the recording, which is the single
- * biggest source of real-world degradation.
+ * head moving between calibration and the recording, and `dist` how far they
+ * have leaned in or out of it — 1 is the distance they calibrated at.
  */
-function calibrateAndTest(noise: number, drift: number, seed: number): FitResult {
+function calibrateAndTest(noise: number, drift: number, seed: number, dist = 1): FitResult {
   const rand = makeRandom(seed);
   const { rows, targetX, targetY } = buildCalibrationData(noise, rand);
 
@@ -258,7 +305,7 @@ function calibrateAndTest(noise: number, drift: number, seed: number): FitResult
       pitch: BASE_HEAD.pitch + (rand() - 0.5) * drift * 0.8,
       x: BASE_HEAD.x + (rand() - 0.5) * drift * 0.3,
       y: BASE_HEAD.y + (rand() - 0.5) * drift * 0.3,
-      scale: BASE_HEAD.scale + (rand() - 0.5) * drift * 0.15,
+      dist: dist + (rand() - 0.5) * drift * 0.15,
     };
     const face = simulateFace(tx, ty, head, noise, rand);
     const [px, py] = predict(model, buildFeatureVector(face));
@@ -278,26 +325,26 @@ function calibrateAndTest(noise: number, drift: number, seed: number): FitResult
 section("Feature extraction");
 {
   const rand = makeRandom(7);
-  const face = simulateFace(700, 400, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand);
+  const face = simulateFace(700, 400, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand);
   const vector = buildFeatureVector(face);
   check("feature vector length matches FEATURE_DIM", vector.length === FEATURE_DIM, `${vector.length}`);
   check("feature vector is all finite", vector.every(Number.isFinite));
 
   // Looking right should move the irises right relative to looking left.
   const left = buildFeatureVector(
-    simulateFace(150, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+    simulateFace(150, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand)
   );
   const right = buildFeatureVector(
-    simulateFace(1290, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+    simulateFace(1290, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand)
   );
   // dx and dy sit at indices 0 and 1 of the basis.
   check("horizontal gaze moves the iris offset monotonically", right[0] > left[0]);
 
   const up = buildFeatureVector(
-    simulateFace(720, 80, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+    simulateFace(720, 80, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand)
   );
   const down = buildFeatureVector(
-    simulateFace(720, 820, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+    simulateFace(720, 820, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand)
   );
   check("vertical gaze moves the iris offset monotonically", down[1] > up[1]);
 }
@@ -392,6 +439,83 @@ section("Gaze model fitting");
     drifting.meanError < 220,
     `mean ${drifting.meanError.toFixed(1)}px`
   );
+}
+
+section("Leaning in and out of the calibration");
+{
+  /**
+   * Participants do not hold one distance for a whole session. They lean in to
+   * read small type and sit back when they are done, and until the basis
+   * carried a distance term this was the largest uncorrected error in the tool
+   * — larger than head rotation, and silent, because a stale calibration
+   * returns confident gaze at the wrong place rather than no gaze at all.
+   *
+   * Averaged over seeds: one draw is not evidence about a regression this size.
+   */
+  const meanAt = (dist: number) =>
+    [21, 37, 53, 69, 85]
+      .map((seed) => calibrateAndTest(0.004, 0.05, seed, dist).meanError)
+      .reduce((a, b) => a + b, 0) / 5;
+
+  const atCalibration = meanAt(1);
+  const leanedIn = meanAt(0.85);
+  const wellIn = meanAt(0.7);
+  const satBack = meanAt(1.2);
+
+  check(
+    "a participant who leans 15% closer stays inside the usable band",
+    leanedIn < 55,
+    `mean ${leanedIn.toFixed(1)}px, against ${atCalibration.toFixed(1)}px at the calibrated distance`
+  );
+  check(
+    "leaning a third of the way in degrades but does not collapse",
+    wellIn < 90,
+    `mean ${wellIn.toFixed(1)}px`
+  );
+  check(
+    "and sitting back is handled too, not just leaning in",
+    satBack < 45,
+    `mean ${satBack.toFixed(1)}px`
+  );
+
+  /**
+   * The regression guard, and the reason the threshold is a ratio rather than a
+   * pixel count: what went wrong before was not that the error was large, it
+   * was that it scaled with distance while nothing in the basis could see
+   * distance. Every distance-shaped column was a ratio of two face lengths, and
+   * every such ratio is distance-invariant by construction, so the tool was
+   * blind to distance while appearing to model it.
+   *
+   * Leaning a third of the way in used to cost about 12x the error at the
+   * calibrated distance. It now costs under 5x. The guard sits at 6x, which the
+   * old basis fails on any seed and the current one clears with room.
+   */
+  check(
+    "distance is modelled, not merely absorbed as noise",
+    wellIn < atCalibration * 6,
+    `${wellIn.toFixed(1)}px at 70% of the calibrated distance vs ${atCalibration.toFixed(1)}px at it — ${(wellIn / atCalibration).toFixed(1)}x`
+  );
+
+  // The claim above rests on interocular width being the only distance signal
+  // present, so it is worth stating outright rather than trusting.
+  const near = simulateFace(720, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 0.7 }, 0, makeRandom(3));
+  const far = simulateFace(720, 450, { yaw: 0, pitch: 0, x: 0.5, y: 0.5, dist: 1.4 }, 0, makeRandom(3));
+  check(
+    "apparent eye size cannot report distance, so it must not be asked to",
+    Math.abs(near.scale - far.scale) < 1e-9,
+    `scale ${near.scale.toFixed(6)} at both 0.7x and 1.4x`
+  );
+  check(
+    "interocular width does report it",
+    near.interocular > far.interocular * 1.9,
+    `${near.interocular.toFixed(4)} near vs ${far.interocular.toFixed(4)} far`
+  );
+}
+
+section("Gaze model fitting, continued");
+{
+  const realistic = calibrateAndTest(0.004, 0.05, 12);
+  const clean = calibrateAndTest(0, 0.02, 11);
 
   check("cross-validation picked a finite lambda", Number.isFinite(realistic.model.lambda), `lambda=${realistic.model.lambda}`);
   check("all weights are finite", Array.from(realistic.model.wx).every(Number.isFinite));
@@ -424,7 +548,7 @@ section("Gaze model fitting");
   // would be worse than not persisting at all.
   const restored = deserialiseModel(serialiseModel(realistic.model));
   const rand = makeRandom(99);
-  const face = simulateFace(600, 500, { yaw: 0.01, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand);
+  const face = simulateFace(600, 500, { yaw: 0.01, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand);
   const features = buildFeatureVector(face);
   const [ax, ay] = predict(realistic.model, features);
   const [bx, by] = predict(restored, features);
@@ -540,7 +664,7 @@ section("Correcting the offset moves the gaze back");
   const model = fitRidge(rows, targetX, targetY);
 
   const features = buildFeatureVector(
-    simulateFace(600, 500, { yaw: 0.01, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+    simulateFace(600, 500, { yaw: 0.01, pitch: 0, x: 0.5, y: 0.5, dist: 1 }, 0, rand)
   );
   const [rawX, rawY] = predict(model, features);
   const [shiftedX, shiftedY] = predict(withBias(model, { x: 30, y: -20 }), features);
@@ -566,7 +690,7 @@ section("Correcting the offset moves the gaze back");
     pitch: -0.03 + settle + (r() - 0.5) * 0.03,
     x: 0.5 + (r() - 0.5) * 0.012,
     y: 0.48 + settle * 0.35 + (r() - 0.5) * 0.012,
-    scale: 0.62 + (r() - 0.5) * 0.005,
+    dist: 1 + (r() - 0.5) * 0.008,
   });
 
   // The five-dot accuracy check, as the app runs it.

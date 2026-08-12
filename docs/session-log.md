@@ -256,3 +256,98 @@ grid at a fixed viewing distance, so the 2-4° claim remains unverified in the
 one way that would settle it. Open questions 2 (decay over a recording) and 4
 (GPU vs CPU delegate) are untouched — though the five-dot recheck is now the
 obvious way to answer 2, by running it after a recording as well as before.
+
+## 2026-08-12 — The tool could not see how far away you were sitting
+
+Everything below is synthetic. No participant sat for any of it.
+
+### What was wrong
+
+`FaceState.scale` was documented as "interocular distance in normalised units: a
+proxy for viewing distance". It was interocular distance *divided by face
+height*. Every ratio of two lengths measured on the same face is invariant to
+how far that face is from the camera — both lengths shrink together — so the
+quantity the basis called distance was, by construction, the one thing that
+could not report it. Apparent eye size is a real signal; it moves with pitch, as
+a face tilted away foreshortens vertically, and it differs between people. It
+just is not distance.
+
+Three of the twenty-two columns were built on it: `scale`, `dx * scale`, and
+`dy * scale`. All three were doing something — reporting pose and identity — but
+none of them was doing the job their names implied.
+
+The consequence is the kind this codebase keeps meeting: nothing looked broken.
+The fit converged, cross-validation reported a healthy error, and the validation
+dots agreed, because all of them happen at whatever distance the participant is
+sitting at right then. The error only appears afterwards, when someone leans in
+to read small type, and it appears as confident gaze in the wrong place.
+
+### What it cost
+
+On the synthetic eye, calibrating and then moving:
+
+| Viewing distance | Before | After |
+| --- | --- | --- |
+| As calibrated | 12.9px | 13.0px |
+| Leaning 15% closer | 72.9px | 39.3px |
+| Leaning 30% closer | 156.8px | 59.8px |
+| Sitting 20% back | 51.2px | 28.4px |
+
+Leaning a third of the way in cost 12x the error at the calibrated distance. It
+now costs 4.6x. Nothing was given up at the distance the participant calibrated
+at, which is the case the old basis was implicitly tuned for.
+
+That makes viewing distance a larger source of error than head rotation, which
+had been the assumed worst case and is the one the tests covered.
+
+### The fix
+
+`FaceState` now carries `interocular` — outer-corner separation as a fraction of
+the frame width, unnormalised — alongside `scale`, which keeps its pose-and-
+identity job under an honest description. The basis gains three columns:
+`interocular`, `dx * interocular`, and `dy * interocular`. The interactions are
+the point rather than the raw term: sitting closer widens the angle a given
+screen point subtends, so the gain from iris offset to screen position is itself
+a function of distance. `FEATURE_BASIS_VERSION` goes to 3, which invalidates
+stored calibrations rather than applying them to a basis they were never fit on.
+
+A quadratic in interocular was tried and rejected. It was marginally better at
+moderate distances and unstable at the extremes — 152px at 70% of the calibrated
+distance, worse than doing nothing — which is the usual reward for adding
+curvature to an extrapolation.
+
+### Why the tests missed it
+
+The simulator had no viewing distance in it. `head.scale` was a number that
+wobbled by ±0.01 and was fed straight into `FaceState.scale`, so it stood in for
+apparent eye size without any geometry behind it. Nothing anywhere computed
+where the participant actually was, which meant no test could ask what happened
+when they moved.
+
+The simulator now takes `dist`, a real position, and derives the landmarks from
+it: interocular width and face height both scale as 1/distance, and the eye
+rotation needed to reach a screen point grows as the participant approaches. The
+four new checks fail on the old basis on every seed — verified by reverting the
+basis and re-running, not by assuming.
+
+One deliberate detail: calibration is simulated with ±3% distance wobble rather
+than a fixed distance. The distance term can only be fitted from distance
+variation, so a perfectly still calibration would leave that column constant and
+unlearnable. Real calibrations are never that still, but a test could easily
+have been.
+
+### Still open
+
+The validation error is measured partly in-sample. The constant offset is
+estimated from the five validation dots and then subtracted from those same
+dots' samples to produce the reported figure. On the synthetic eye this
+overstates accuracy by about 1.1x — small next to what was just fixed, and small
+next to the honest uncertainty in the 2-4° claim, but it is the same leak that
+grouped cross-validation exists to prevent in `fitRidge`, in a place where
+nothing currently prevents it. A sixth dot held out of the bias estimate would
+settle it.
+
+Unchanged: nothing has been run against a printed target grid at a fixed viewing
+distance, so the degree figures remain synthetic. That is now a sharper gap than
+it was, because the fix above makes a prediction a physical rig could check —
+lean in 30cm and the error should stay flat where it used to triple.
