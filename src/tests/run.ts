@@ -13,6 +13,7 @@ import { detectFixations, summarise } from "../analysis/fixations";
 import { analyseAois, aggregateAois, type Aoi } from "../analysis/aoi";
 import { buildFeatureVector, FEATURE_DIM, type FaceState } from "../tracker/features";
 import { OneEuroPoint } from "../tracker/filter";
+import { assessSetup, isReady, type SetupReading } from "../ui/setup";
 import { deserialiseModel, fitRidge, predict, serialiseModel } from "../tracker/regression";
 
 let failures = 0;
@@ -86,6 +87,7 @@ function simulateFace(
     roll: 0,
     headX: head.x,
     headY: head.y,
+    interocular: 0.12,
     scale: head.scale,
     openness: 0.32,
   };
@@ -368,6 +370,42 @@ section("Area of interest analysis");
   check("hit rate is 1 when everyone looked", heroAgg.hitRate === 1);
   check("mean TTFF only averages participants who found it", ctaAgg.meanTimeToFirstFixation === 900);
   check("aggregate reports participant count", ctaAgg.participants === 2);
+}
+
+// --- Setup checks --------------------------------------------------------
+
+{
+  section("Setup assessment");
+
+  const good: SetupReading = {
+    faceVisible: true,
+    interocular: 0.12,
+    headX: 0.5,
+    headY: 0.5,
+    fps: 28,
+    faceLuma: 140,
+    frameLuma: 120,
+  };
+
+  const state = (reading: SetupReading, id: string) =>
+    assessSetup(reading).find((c) => c.id === id)!.state;
+
+  check("well-set-up participant passes every check", isReady(assessSetup(good)));
+  check("no face fails", state({ ...good, faceVisible: false }, "face") === "fail");
+  check("too far warns", state({ ...good, interocular: 0.05 }, "distance") === "warn");
+  check("too close warns", state({ ...good, interocular: 0.25 }, "distance") === "warn");
+  check("off-centre warns", state({ ...good, headX: 0.15 }, "centering") === "warn");
+  check("dark face fails lighting", state({ ...good, faceLuma: 30 }, "lighting") === "fail");
+  check(
+    "backlight warns",
+    state({ ...good, faceLuma: 90, frameLuma: 180 }, "lighting") === "warn"
+  );
+  check("low fps warns", state({ ...good, fps: 9 }, "fps") === "warn");
+  check(
+    "missing luma sample is unknown, not a failure",
+    state({ ...good, faceLuma: null, frameLuma: null }, "lighting") === "unknown"
+  );
+  check("not ready while any check warns", !isReady(assessSetup({ ...good, fps: 9 })));
 }
 
 // --- Result --------------------------------------------------------------

@@ -332,6 +332,58 @@ p {
   border-left-color: var(--bad);
 }
 
+.setup-checks {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+.setup-check {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+.setup-check .setup-label {
+  display: block;
+}
+.setup-check .setup-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.setup-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.5;
+}
+.setup-check.is-ok .setup-dot {
+  background: var(--good);
+  opacity: 1;
+}
+.setup-check.is-warn .setup-dot {
+  background: var(--warn);
+  opacity: 1;
+}
+.setup-check.is-fail .setup-dot {
+  background: var(--bad);
+  opacity: 1;
+}
+.setup-check.is-ok {
+  color: var(--muted);
+}
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* --- Calibration ------------------------------------------------------ */
 
 .calib-overlay {
@@ -414,6 +466,21 @@ p {
   height: 100%;
   border: 0;
   background: #fff;
+  /* Frozen during recording: a scrolled or clicked-through page would put
+     different content under the same recorded coordinates, and a cross-origin
+     iframe gives no way to compensate. */
+  pointer-events: none;
+}
+.record-stimulus.is-scrollable {
+  display: block;
+  overflow-y: auto;
+}
+.record-image-full {
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  height: auto;
+  display: block;
 }
 .record-progress {
   position: absolute;
@@ -507,15 +574,24 @@ p {
   min-width: 0;
 }
 .results-stage {
-  position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: auto;
+  max-height: 82vh;
   min-height: 320px;
+  text-align: center;
+}
+.results-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  text-align: left;
+  vertical-align: top;
+}
+.results-wrap.is-full {
+  display: block;
+  width: 100%;
 }
 .results-image {
   max-width: 100%;
@@ -523,9 +599,31 @@ p {
   object-fit: contain;
   display: block;
 }
+.results-image.is-full {
+  width: 100%;
+  max-height: none;
+  height: auto;
+}
 .results-overlay {
   position: absolute;
   pointer-events: none;
+}
+.results-frame-wrap {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #fff;
+}
+.results-frame {
+  border: 0;
+  display: block;
+  transform-origin: top left;
+  /* The re-render is a backdrop, not a live page: clicks belong to AOIs. */
+  pointer-events: none;
+}
+.results-frame-note {
+  font-size: 12px;
+  margin-top: 8px;
 }
 .results-placeholder {
   padding: 60px 24px;

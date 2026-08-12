@@ -8,6 +8,7 @@ import { describeAccuracy, runCalibration } from "./ui/calibration";
 import { clear, el } from "./ui/dom";
 import { runRecording } from "./ui/record";
 import { renderResults } from "./ui/results";
+import { mountSetupPanel } from "./ui/setup";
 
 const app = document.getElementById("app") as HTMLElement;
 const engine = new GazeEngine();
@@ -193,7 +194,7 @@ function newStudyForm(): HTMLElement {
   const submit = async () => {
     error.textContent = "";
     const name = nameInput.value.trim();
-    const url = urlInput.value.trim();
+    let url = urlInput.value.trim();
 
     if (!name) {
       error.textContent = "Give the study a name.";
@@ -202,6 +203,18 @@ function newStudyForm(): HTMLElement {
     if (!file && !url) {
       error.textContent = "Add an image or a URL to look at.";
       return;
+    }
+
+    // A schemeless URL ("example.com") would load as a path relative to this
+    // app's origin inside the stimulus iframe and 404.
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+    if (url) {
+      try {
+        new URL(url);
+      } catch {
+        error.textContent = "That URL does not look valid.";
+        return;
+      }
     }
 
     let stimulus: Study["stimulus"];
@@ -282,6 +295,7 @@ async function runSession(study: Study): Promise<void> {
   });
   const gazeDotToggle = el("input", { type: "checkbox" });
 
+  const setupHost = el("div", { class: "setup-host" });
   const panel = el(
     "section",
     { class: "panel session-panel" },
@@ -289,6 +303,7 @@ async function runSession(study: Study): Promise<void> {
     el("p", { class: "muted" }, study.task || "No task set"),
     preview,
     status,
+    setupHost,
     field("Participant label", participantInput),
     el(
       "label",
@@ -322,20 +337,22 @@ async function runSession(study: Study): Promise<void> {
     return;
   }
 
-  status.textContent = "Camera running. Sit about an arm's length away, square to the screen.";
+  status.textContent = "Camera running. Get set up — calibration unlocks when everything below is green.";
 
-  const unsubscribe = engine.onStatus((s) => {
-    if (!s.faceVisible) {
-      status.textContent = "No face detected — check your lighting and framing.";
-    } else if (!s.usable) {
-      status.textContent = "Face detected, but turned too far or too close to the edge of frame.";
-    } else {
-      status.textContent = `Tracking at ${Math.round(s.fps)} fps. Ready to calibrate.`;
-    }
+  // Live setup feedback drives whether the calibrate button is enabled; a
+  // participant who calibrates while backlit or half out of frame produces a
+  // model that fails silently, so the gate is worth the friction.
+  let setupReady = false;
+  // While calibration runs or its outcome is on screen, readiness changes must
+  // not clobber the actions area.
+  let lockActions = false;
+  const disposeSetup = mountSetupPanel(engine, setupHost, (ready) => {
+    setupReady = ready;
+    if (!lockActions) renderActions();
   });
 
   const beginRecording = async (validationError: number | null) => {
-    unsubscribe();
+    disposeSetup();
     const recording = await runRecording(app, {
       study,
       engine,
@@ -354,11 +371,13 @@ async function runSession(study: Study): Promise<void> {
   };
 
   const calibrateThenRecord = async () => {
+    lockActions = true;
     clear(actions);
     const outcome = await runCalibration(engine, app);
 
     if (outcome.cancelled) {
       status.textContent = "Calibration cancelled.";
+      lockActions = false;
       renderActions();
       return;
     }
@@ -400,10 +419,29 @@ async function runSession(study: Study): Promise<void> {
     actions.append(
       el(
         "button",
-        { class: "btn btn-primary", type: "button", onclick: () => void calibrateThenRecord() },
-        "Calibrate"
+        {
+          class: "btn btn-primary",
+          type: "button",
+          ...(setupReady ? {} : { disabled: true }),
+          onclick: () => void calibrateThenRecord(),
+        },
+        setupReady ? "Calibrate" : "Calibrate (fix setup first)"
       )
     );
+
+    if (!setupReady) {
+      actions.append(
+        el(
+          "button",
+          {
+            class: "btn btn-ghost btn-small",
+            type: "button",
+            onclick: () => void calibrateThenRecord(),
+          },
+          "Calibrate anyway"
+        )
+      );
+    }
 
     if (stored) {
       const age = Math.round((Date.now() - stored.savedAt) / 60000);

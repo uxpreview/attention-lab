@@ -46,6 +46,14 @@ export async function runRecording(
       if (img.complete) resolve();
       else img.addEventListener("load", () => resolve(), { once: true });
     });
+    // A page-length wireframe squeezed into the viewport is unreadable, so tall
+    // images render full-width and scroll instead. Gaze is mapped through the
+    // image's live rect per sample, so scrolling keeps document coordinates
+    // correct.
+    if (isTallStimulus(img.naturalWidth, img.naturalHeight)) {
+      stimulusLayer.classList.add("is-scrollable");
+      img.classList.add("record-image-full");
+    }
   } else {
     const frame = el("iframe", {
       class: "record-frame",
@@ -84,8 +92,12 @@ export async function runRecording(
       dot.style.transform = `translate(${sample.x}px, ${sample.y}px)`;
     }
 
-    const nx = (sample.x - rect.left) / rect.width;
-    const ny = (sample.y - rect.top) / rect.height;
+    // Measured per sample, not once: a scrollable stimulus moves under the
+    // gaze, and the live rect is what converts screen position into document
+    // position on the stimulus.
+    const live = stimulusEl.getBoundingClientRect();
+    const nx = (sample.x - live.left) / live.width;
+    const ny = (sample.y - live.top) / live.height;
     // A small margin outside the stimulus is kept and clamped: gaze estimates
     // near an edge routinely land just past it, and discarding those would bias
     // edge content downward in every heatmap.
@@ -129,6 +141,15 @@ export async function runRecording(
   return recording;
 }
 
+/**
+ * A stimulus notably taller than the screen is worth scrolling; the 1.2 slack
+ * keeps near-viewport images in the simpler letterboxed mode.
+ */
+export function isTallStimulus(width: number, height: number): boolean {
+  if (width <= 0 || height <= 0) return false;
+  return height / width > (window.innerHeight / window.innerWidth) * 1.2;
+}
+
 function showTaskPrompt(chrome: HTMLElement, study: Study): Promise<boolean> {
   return new Promise((resolve) => {
     const panel = el(
@@ -141,7 +162,10 @@ function showTaskPrompt(chrome: HTMLElement, study: Study): Promise<boolean> {
         { class: "task-hint" },
         study.duration > 0
           ? `Recording stops automatically after ${study.duration} seconds.`
-          : "Press space again when you are done."
+          : "Press space again when you are done.",
+        study.stimulus.kind === "url"
+          ? " The page is frozen during recording — scrolling and clicking are disabled so every participant sees the same thing."
+          : ""
       ),
       el("button", { class: "btn btn-primary", type: "button" }, "Start — or press space")
     );

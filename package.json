@@ -20,5 +20,9 @@
     "esbuild": "^0.24.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
+  },
+  "allowScripts": {
+    "esbuild@0.24.2": true,
+    "esbuild@0.21.5": true
   }
 }

@@ -54,7 +54,10 @@ export interface FaceState {
   /** Nose tip in normalised video coordinates: where the head sits in frame. */
   headX: number;
   headY: number;
-  /** Interocular distance in normalised units: a proxy for viewing distance. */
+  /** Outer-corner interocular distance as a fraction of the frame — grows as
+   * the face approaches the camera, so it works as a viewing-distance proxy. */
+  interocular: number;
+  /** Interocular over face height: apparent eye size, distance-invariant. */
   scale: number;
   /** Mean eye openness across both eyes. */
   openness: number;
@@ -177,7 +180,7 @@ export function readFaceState(
     | undefined);
 
   const nose = landmarks[NOSE_TIP];
-  const scale = dist(landmarks[LEFT_EYE_OUTER], landmarks[RIGHT_EYE_OUTER]);
+  const interocular = dist(landmarks[LEFT_EYE_OUTER], landmarks[RIGHT_EYE_OUTER]);
   const faceHeight = dist(landmarks[FOREHEAD], landmarks[CHIN]);
 
   return {
@@ -188,7 +191,8 @@ export function readFaceState(
     roll,
     headX: nose.x,
     headY: nose.y,
-    scale: faceHeight > 1e-6 ? scale / faceHeight : scale,
+    interocular,
+    scale: faceHeight > 1e-6 ? interocular / faceHeight : interocular,
     openness: (left.openness + right.openness) / 2,
   };
 }

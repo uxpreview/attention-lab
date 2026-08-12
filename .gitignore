@@ -3,3 +3,5 @@ dist/
 public/models/
 *.local
 .DS_Store
+.vercel
+.env*

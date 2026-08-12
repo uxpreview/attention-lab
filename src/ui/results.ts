@@ -12,6 +12,7 @@ import {
 import { deleteRecording, listRecordings, newId, saveStudy } from "../data/store";
 import type { Recording, Study } from "../data/types";
 import { clear, el, formatMs, formatPercent, nextFrame } from "./dom";
+import { isTallStimulus } from "./record";
 
 type ViewMode = HeatmapStyle | "scanpath" | "raw";
 
@@ -44,37 +45,68 @@ export async function renderResults(
   let drawingAoi = false;
 
   const stage = el("div", { class: "results-stage" });
+  // Stimulus, overlay, and AOI layer share this wrapper so that scrolling a
+  // tall stimulus moves all three together and alignment never drifts.
+  const wrap = el("div", { class: "results-wrap" });
   const overlay = el("canvas", { class: "results-overlay" });
   const aoiLayer = el("div", { class: "aoi-layer" });
   let stimulusImage: HTMLImageElement | null = null;
   let objectUrl: string | null = null;
+  let stimulusFrame: HTMLElement | null = null;
+  let frameIframe: HTMLIFrameElement | null = null;
+  let frameNote: HTMLElement | null = null;
+  // Recorded viewport of the first recording: the page is re-rendered at that
+  // exact size and scaled down, so its layout matches what participants saw.
+  let recordedW = 1280;
+  let recordedH = 720;
 
   if (study.stimulus.kind === "image") {
     objectUrl = URL.createObjectURL(study.stimulus.blob);
     stimulusImage = el("img", { class: "results-image", src: objectUrl, alt: "" });
-    stage.append(stimulusImage);
+    if (isTallStimulus(study.stimulus.width, study.stimulus.height)) {
+      stimulusImage.classList.add("is-full");
+      wrap.classList.add("is-full");
+    }
+    wrap.append(stimulusImage);
+  } else if (recordings.length > 0) {
+    const rect = recordings[0].quality.stimulusRect;
+    recordedW = Math.round(rect.width || recordings[0].quality.viewportWidth || 1280);
+    recordedH = Math.round(rect.height || recordings[0].quality.viewportHeight || 720);
+    stimulusFrame = el("div", { class: "results-frame-wrap" });
+    stimulusFrame.style.aspectRatio = `${recordedW} / ${recordedH}`;
+    frameIframe = el("iframe", {
+      class: "results-frame",
+      src: study.stimulus.url,
+      referrerpolicy: "no-referrer",
+      tabindex: "-1",
+      title: "Recorded page",
+    });
+    stimulusFrame.append(frameIframe);
+    wrap.classList.add("is-full");
+    wrap.append(stimulusFrame);
+    frameNote = el(
+      "p",
+      { class: "muted results-frame-note" },
+      `Live re-render of ${study.stimulus.url} at the recorded ${recordedW}×${recordedH} viewport — dynamic content may differ from what participants saw.`
+    );
   } else {
     stage.append(
       el(
         "div",
         { class: "results-placeholder" },
         el("p", {}, "Live page stimulus"),
-        el("code", {}, study.stimulus.url),
-        el(
-          "p",
-          { class: "muted" },
-          "Overlays are drawn against the recorded viewport, not a re-render of the page."
-        )
+        el("code", {}, study.stimulus.url)
       )
     );
   }
-  stage.append(overlay, aoiLayer);
+  wrap.append(overlay, aoiLayer);
+  stage.append(wrap);
 
   const sidebar = el("aside", { class: "results-sidebar" });
   const layout = el(
     "div",
     { class: "results-layout" },
-    el("div", { class: "results-main" }, stage),
+    el("div", { class: "results-main" }, stage, frameNote),
     sidebar
   );
 
@@ -133,12 +165,26 @@ export async function renderResults(
 
   const draw = async (): Promise<void> => {
     await nextFrame();
-    const rect = (stimulusImage ?? stage).getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
 
-    overlay.style.left = `${rect.left - stageRect.left}px`;
-    overlay.style.top = `${rect.top - stageRect.top}px`;
+    // The iframe renders at the recorded viewport size and is scaled to fit
+    // the stage, so element positions line up with the recorded gaze.
+    if (frameIframe && stimulusFrame) {
+      const scale = stimulusFrame.clientWidth / recordedW;
+      frameIframe.style.width = `${recordedW}px`;
+      frameIframe.style.height = `${recordedH}px`;
+      frameIframe.style.transform = `scale(${scale})`;
+    }
+
+    const rect = (stimulusImage ?? stimulusFrame ?? stage).getBoundingClientRect();
+    // Page-length canvases at 2x device pixels cost hundreds of megabytes of
+    // ImageData in the heatmap pass; drop to 1x where nobody can see the
+    // difference anyway.
+    const dpr = rect.height > 2600 ? 1 : Math.min(2, window.devicePixelRatio || 1);
+
+    // The stimulus is the wrapper's first child at its origin, so the overlay
+    // pins to 0,0 and scrolls with it.
+    overlay.style.left = "0px";
+    overlay.style.top = "0px";
     overlay.style.width = `${rect.width}px`;
     overlay.style.height = `${rect.height}px`;
     overlay.width = Math.max(1, Math.round(rect.width * dpr));
