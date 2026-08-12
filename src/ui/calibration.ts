@@ -1,5 +1,11 @@
 import { ERROR_BAD_DEG, ERROR_GOOD_DEG, pxToDegrees } from "../analysis/quality";
 import type { CalibrationSample, GazeEngine } from "../tracker/gaze";
+import {
+  measureBias,
+  withBias,
+  type BiasEstimate,
+  type ResidualSample,
+} from "../tracker/regression";
 import { confirmButton, el, inertSiblings, sleep } from "./dom";
 
 /**
@@ -94,24 +100,73 @@ export interface CalibrationOutcome {
   cancelled: boolean;
   /** Mean validation error in CSS pixels, or null if validation was skipped. */
   validationError: number | null;
+  /**
+   * The residual at each validation dot: where the model looked, minus where
+   * the participant demonstrably was.
+   *
+   * The mean above is a magnitude, and a magnitude cannot say what kind of
+   * wrong a calibration is. A rigid offset, a field contracted toward the
+   * screen centre, and pure per-sample scatter all average to the same number
+   * and want three different responses. Keeping the vectors is what lets
+   * {@link measureBias} separate the correctable part from the rest, and what
+   * lets a recording be diagnosed after the fact instead of re-run.
+   */
+  residuals: ResidualSample[];
+  /** The correctable component of {@link residuals}, already applied to the
+   * engine's model. Null when validation was skipped. */
+  bias: BiasEstimate | null;
 }
 
-export async function runCalibration(
+/**
+ * "full" fits a new model from 13 dots and then measures it with 5 more.
+ * "recheck" skips the fitting and measures the model already installed —
+ * see {@link recheckAccuracy}.
+ */
+type Mode = "full" | "recheck";
+
+/** Fits a calibration and measures it. */
+export function runCalibration(engine: GazeEngine, host: HTMLElement): Promise<CalibrationOutcome> {
+  return runFlow(engine, host, "full");
+}
+
+/**
+ * Re-runs only the accuracy check against a calibration that is already
+ * installed, measuring what has drifted since it was fitted.
+ *
+ * This is the cheap half of calibration — five dots rather than eighteen — and
+ * it exists because reusing a stored calibration used to carry its original
+ * accuracy figure forward unexamined. A participant who has shifted in their
+ * seat since fitting has a model with a constant offset, and both that offset
+ * and the stale number reported alongside it are wrong in the same direction:
+ * confidently.
+ */
+export function recheckAccuracy(
   engine: GazeEngine,
   host: HTMLElement
 ): Promise<CalibrationOutcome> {
+  return runFlow(engine, host, "recheck");
+}
+
+async function runFlow(
+  engine: GazeEngine,
+  host: HTMLElement,
+  mode: Mode
+): Promise<CalibrationOutcome> {
+  const recheck = mode === "recheck";
   const overlay = el("div", {
     class: "calib-overlay",
     role: "dialog",
     "aria-modal": "true",
-    "aria-label": "Calibration",
+    "aria-label": recheck ? "Accuracy check" : "Calibration",
     tabindex: "-1",
   });
-  const heading = el("h2", {}, "Calibration");
+  const heading = el("h2", {}, recheck ? "Accuracy check" : "Calibration");
   const guidance = el(
     "p",
     { class: "calib-guidance" },
-    "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until the ring around it completes. Esc cancels."
+    recheck
+      ? "Five dots, to check the calibration still fits how you are sitting now. Look at each one and click it, then keep looking until the ring completes. Esc cancels."
+      : "Keep your head still and your face lit from the front. Look at each dot and click it, then keep looking until the ring around it completes. Esc cancels."
   );
   // What survives the dimming. The full block used to go to opacity 0 after the
   // first dot, leaving seventeen more clicks with no statement of the one rule
@@ -191,7 +246,9 @@ export async function runCalibration(
   /** Every dot the participant is asked to click, both phases together. The
    * bar spans this rather than restarting at the accuracy check, because what a
    * participant wants to know is how much of *this* is left. */
-  const TOTAL_POINTS = CALIBRATION_POINTS.length + VALIDATION_POINTS.length;
+  const TOTAL_POINTS = recheck
+    ? VALIDATION_POINTS.length
+    : CALIBRATION_POINTS.length + VALIDATION_POINTS.length;
   const setProgress = (done: number, label: string, phase: string): void => {
     progress.textContent = label;
     phaseNote.textContent = phase;
@@ -230,7 +287,7 @@ export async function runCalibration(
   window.addEventListener("keydown", onKey);
 
   try {
-    for (let i = 0; i < CALIBRATION_POINTS.length; i++) {
+    for (let i = 0; !recheck && i < CALIBRATION_POINTS.length; i++) {
       if (cancelled) break;
       const [nx, ny] = CALIBRATION_POINTS[i];
       // Phase-labelled, because an unlabelled counter restarting at "1 / 5"
@@ -259,45 +316,36 @@ export async function runCalibration(
       if (i === 0) instruction.classList.add("is-dim");
     }
 
-    if (cancelled) return { cancelled: true, validationError: null };
+    if (cancelled) return { cancelled: true, validationError: null, residuals: [], bias: null };
 
-    setProgress(CALIBRATION_POINTS.length, "Fitting model…", "One moment");
-    engine.calibrate(samples);
+    if (!recheck) {
+      setProgress(CALIBRATION_POINTS.length, "Fitting model…", "One moment");
+      engine.calibrate(samples);
 
-    instruction.classList.remove("is-dim");
-    heading.textContent = "Accuracy check";
-    guidance.textContent =
-      "Five more dots — the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
+      instruction.classList.remove("is-dim");
+      heading.textContent = "Accuracy check";
+      guidance.textContent =
+        "Five more dots — the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
+    }
 
-    const pointErrors: number[] = [];
-    for (let i = 0; i < VALIDATION_POINTS.length; i++) {
-      if (cancelled) break;
-      const [nx, ny] = VALIDATION_POINTS[i];
+    const done = recheck ? 0 : CALIBRATION_POINTS.length;
+    const measurement = await runValidation(engine, dot, abort.signal, (i) => {
       setProgress(
-        CALIBRATION_POINTS.length + i + 1,
+        done + i + 1,
         `Accuracy check ${i + 1} / ${VALIDATION_POINTS.length}`,
-        "The last of it"
+        recheck ? "" : "The last of it"
       );
-      keepCancelClear(cancelBtn, nx, ny);
-      keepStatusClear(status, nx, ny);
-      let error: number | "retry" | null;
-      do {
-        error = await measureAtPoint(engine, dot, nx, ny, abort.signal);
-      } while (error === "retry");
-      if (error === null) {
-        cancelled = true;
-        break;
-      }
-      pointErrors.push(error);
-      if (i === 0) instruction.classList.add("is-dim");
-    }
+      keepCancelClear(cancelBtn, VALIDATION_POINTS[i][0], VALIDATION_POINTS[i][1]);
+      keepStatusClear(status, VALIDATION_POINTS[i][0], VALIDATION_POINTS[i][1]);
+      // On a recheck the instructions are the whole context the participant
+      // has, so they survive one dot longer than in the full flow.
+      if (i === (recheck ? 1 : 0)) instruction.classList.add("is-dim");
+    });
 
-    if (cancelled || pointErrors.length === 0) {
-      return { cancelled, validationError: null };
+    if (measurement === null) {
+      return { cancelled: true, validationError: null, residuals: [], bias: null };
     }
-
-    const mean = pointErrors.reduce((a, b) => a + b, 0) / pointErrors.length;
-    return { cancelled: false, validationError: mean };
+    return { cancelled: false, ...measurement };
   } finally {
     window.removeEventListener("keydown", onKey);
     offStatus();
@@ -423,15 +471,116 @@ async function collectAtPoint(
   return "ok";
 }
 
-/** Returns the median gaze error at this point in pixels, "retry" if focus
- * was lost mid-dwell (same reasoning as collection), or null if abandoned. */
+/** The measured part of a {@link CalibrationOutcome}. */
+type ValidationResult = Pick<CalibrationOutcome, "validationError" | "residuals" | "bias">;
+
+/**
+ * Runs the validation dots, then measures and installs a bias correction.
+ *
+ * Correcting here rather than at the call site is deliberate: the residuals are
+ * measured against the model currently installed on the engine, so the
+ * correction is only valid for that model. Applying it anywhere else risks
+ * pairing an offset with a calibration it was not measured against, which would
+ * displace every gaze point by a constant and — this being the failure mode
+ * this app keeps rediscovering — look exactly like data.
+ *
+ * Returns null if the participant abandoned the run.
+ */
+async function runValidation(
+  engine: GazeEngine,
+  dot: HTMLButtonElement,
+  signal: AbortSignal,
+  onPoint: (index: number) => void
+): Promise<ValidationResult | null> {
+  const residuals: ResidualSample[] = [];
+  const measurements: PointMeasurement[] = [];
+
+  for (let i = 0; i < VALIDATION_POINTS.length; i++) {
+    const [nx, ny] = VALIDATION_POINTS[i];
+    onPoint(i);
+
+    let measured: PointMeasurement | "retry" | null;
+    do {
+      measured = await measureAtPoint(engine, dot, nx, ny, signal);
+    } while (measured === "retry");
+    if (measured === null) return null;
+
+    measurements.push(measured);
+    residuals.push({
+      targetX: nx * window.innerWidth,
+      targetY: ny * window.innerHeight,
+      dx: measured.dx,
+      dy: measured.dy,
+    });
+  }
+
+  if (measurements.length === 0) return { validationError: null, residuals: [], bias: null };
+
+  const bias = measureBias(residuals);
+  const model = engine.getModel();
+
+  // An offset too large to be posture is a calibration that has stopped
+  // describing this participant. Report it, but do not subtract it: the
+  // measured error stays honest and the UI can tell them to recalibrate.
+  const correcting = Boolean(model) && bias.correctable;
+  if (model && correcting) engine.setModel(withBias(model, bias));
+
+  // Recompute per-sample error against the model that will actually record.
+  // Reporting the uncorrected figure would overstate the error of a corrected
+  // model, and this number both grades the recording and sizes the heatmap
+  // kernel — so it has to describe the gaze that gets stored, not the gaze the
+  // uncorrected model would have produced.
+  const perPoint = measurements.map((m) =>
+    m.offsets.length === 0
+      ? m.error
+      : medianOf(
+          m.offsets.map(([dx, dy]) =>
+            correcting ? Math.hypot(dx - bias.x, dy - bias.y) : Math.hypot(dx, dy)
+          )
+        )
+  );
+
+  return {
+    validationError: perPoint.reduce((a, b) => a + b, 0) / perPoint.length,
+    residuals,
+    bias,
+  };
+}
+
+/** What one validation dot measured. */
+interface PointMeasurement {
+  /** Median per-sample distance from the dot: the error a single recorded gaze
+   * point carries, which is what the heatmap kernel has to cover. */
+  error: number;
+  /** Median signed residual, component-wise. Taking the median per axis before
+   * combining is what separates a consistent lean from scatter — the magnitude
+   * above cannot, because distance throws the sign away. */
+  dx: number;
+  dy: number;
+  /**
+   * Every sample's signed offset, kept so the error can be recomputed once the
+   * offset correction is known.
+   *
+   * The alternative is to estimate the corrected error from the summary
+   * numbers, and there is no honest way to do that: `dx`/`dy` are medians over
+   * a dot's samples, so they have already averaged away most of the per-sample
+   * scatter a recording will actually carry. Subtracting the bias from *those*
+   * and calling the remainder the error would report a figure two or three
+   * times better than the gaze being stored — and that figure sizes the
+   * heatmap kernel.
+   */
+  offsets: Array<[number, number]>;
+}
+
+/** Returns the gaze error at this point, "retry" if focus was lost mid-dwell
+ * (same reasoning as collection), or null if abandoned. */
 async function measureAtPoint(
   engine: GazeEngine,
   dot: HTMLButtonElement,
   nx: number,
   ny: number,
   signal: AbortSignal
-): Promise<number | "retry" | null> {
+): Promise<PointMeasurement | "retry" | null> {
   const { x, y } = placeDot(dot, nx, ny);
   dot.classList.remove("is-active");
 
@@ -448,9 +597,11 @@ async function measureAtPoint(
   window.addEventListener("blur", onBlur);
 
   await sleep(SETTLE_MS);
-  const errors: number[] = [];
+  const offsetsX: number[] = [];
+  const offsetsY: number[] = [];
   const off = engine.onGaze((sample) => {
-    errors.push(Math.hypot(sample.x - x, sample.y - y));
+    offsetsX.push(sample.x - x);
+    offsetsY.push(sample.y - y);
   });
   await sleep(DWELL_MS);
   off();
@@ -461,11 +612,25 @@ async function measureAtPoint(
 
   if (signal.aborted) return null;
   if (blurred) return "retry";
-  if (errors.length === 0) return Infinity;
-  // Median rather than mean: a single blink-adjacent outlier should not decide
-  // whether we tell the researcher their calibration is good.
-  errors.sort((a, b) => a - b);
-  return errors[Math.floor(errors.length / 2)];
+  if (offsetsX.length === 0) return { error: Infinity, dx: 0, dy: 0, offsets: [] };
+
+  return {
+    // The typical distance of one sample, not the distance of the typical
+    // sample: a recording stores individual gaze points, so this is the figure
+    // that describes them. Taking the magnitude first is deliberate.
+    error: medianOf(offsetsX.map((dx, i) => Math.hypot(dx, offsetsY[i]))),
+    dx: medianOf(offsetsX),
+    dy: medianOf(offsetsY),
+    offsets: offsetsX.map((dx, i) => [dx, offsetsY[i]] as [number, number]),
+  };
+}
+
+/** Median rather than mean throughout this file: a single blink-adjacent
+ * outlier should not decide whether we tell the researcher their calibration
+ * is good, nor how far it leans. */
+function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 function waitForClick(dot: HTMLButtonElement, signal: AbortSignal): Promise<boolean> {
@@ -528,4 +693,50 @@ export function describeAccuracy(errorPx: number | null): {
     label: `Poor: ~${degrees.toFixed(1)}° (${Math.round(errorPx)}px)`,
     detail: "Recalibrate: improve lighting, sit square to the screen, and stay still.",
   };
+}
+
+/**
+ * An offset smaller than this is not worth mentioning, in CSS pixels.
+ *
+ * Below roughly a quarter of a degree the correction is inside the scatter it
+ * was measured through, and saying "corrected a 4px lean" invites a researcher
+ * to read precision into a number that is noise.
+ */
+const NOTABLE_BIAS_PX = 18;
+
+/**
+ * Says which way a calibration leaned, in the terms a participant can act on.
+ *
+ * This is the half of the accuracy check that the single averaged number could
+ * never carry. "~2.9°" tells a researcher how wrong the gaze is; it cannot tell
+ * them that all of it is one direction, which is both the most alarming kind of
+ * wrong — the heatmap is the right shape in the wrong place — and the only kind
+ * that can simply be subtracted. Returns null when there is nothing to say.
+ */
+export function describeBias(bias: BiasEstimate | null): string | null {
+  if (!bias || !Number.isFinite(bias.x) || !Number.isFinite(bias.y)) return null;
+
+  const magnitude = Math.hypot(bias.x, bias.y);
+  if (!bias.correctable) {
+    return (
+      `Gaze is landing ${Math.round(magnitude)}px from where you look — too far off to correct. ` +
+      `Recalibrate rather than trusting this.`
+    );
+  }
+  if (magnitude < NOTABLE_BIAS_PX) return null;
+
+  // Named from the participant's point of view: where the estimate was
+  // landing, not the sign of the residual that produced it.
+  const parts: string[] = [];
+  if (Math.abs(bias.y) >= NOTABLE_BIAS_PX / 2) {
+    parts.push(`${Math.round(Math.abs(bias.y))}px ${bias.y > 0 ? "below" : "above"}`);
+  }
+  if (Math.abs(bias.x) >= NOTABLE_BIAS_PX / 2) {
+    parts.push(`${Math.round(Math.abs(bias.x))}px ${bias.x > 0 ? "right of" : "left of"}`);
+  }
+
+  return (
+    `Gaze was landing ${parts.join(" and ")} where you looked. ` +
+    `That constant offset has been measured and subtracted.`
+  );
 }

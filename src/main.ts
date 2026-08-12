@@ -7,7 +7,13 @@ import type { Study } from "./data/types";
 import { FEATURE_BASIS_VERSION, FEATURE_DIM } from "./tracker/features";
 import { GazeEngine, type TrackerStatus } from "./tracker/gaze";
 import { deserialiseModel, isSerialisedModel, serialiseModel } from "./tracker/regression";
-import { describeAccuracy, runCalibration } from "./ui/calibration";
+import {
+  describeAccuracy,
+  describeBias,
+  recheckAccuracy,
+  runCalibration,
+  type CalibrationOutcome,
+} from "./ui/calibration";
 import { appBar, LAB_URL } from "./ui/chrome";
 import { clear, confirmButton, el, relativeDay } from "./ui/dom";
 import { controlBandHeight, FIT_SCALE_FLOOR, fitStimulus, runRecording } from "./ui/record";
@@ -1555,7 +1561,7 @@ async function runSession(study: Study): Promise<void> {
     }, BLINK_HOLD_MS);
   }
 
-  const beginRecording = async (validationError: number | null) => {
+  const beginRecording = async (calibration: CalibrationOutcome) => {
     // The recording screen has its own face-lost readout; this one would only
     // talk over it.
     releaseStatusListener?.();
@@ -1570,7 +1576,9 @@ async function runSession(study: Study): Promise<void> {
       study,
       engine,
       participant: participantInput.value.trim() || `P${Date.now().toString().slice(-4)}`,
-      validationError,
+      validationError: calibration.validationError,
+      residuals: calibration.residuals,
+      bias: calibration.bias,
       showGazeDot: gazeDotToggle.checked,
     });
 
@@ -1628,7 +1636,6 @@ async function runSession(study: Study): Promise<void> {
       return;
     }
 
-    const accuracy = describeAccuracy(outcome.validationError);
     const model = engine.getModel();
     if (model) {
       storeCalibration({
@@ -1640,25 +1647,99 @@ async function runSession(study: Study): Promise<void> {
       });
     }
 
+    presentAccuracy(outcome);
+  };
+
+  /**
+   * Shows what the accuracy check found and the two ways forward.
+   *
+   * Shared by a fresh calibration and a re-checked one, so a reused
+   * calibration cannot end up reporting its accuracy in different terms — or,
+   * as it did until this was written, in terms measured at a different sitting.
+   */
+  const presentAccuracy = (outcome: CalibrationOutcome): void => {
+    const accuracy = describeAccuracy(outcome.validationError);
+    const verdict = el(
+      "div",
+      { class: `accuracy accuracy-${accuracy.grade}`, role: "status" },
+      el("strong", {}, accuracy.label),
+      el("p", { class: "muted" }, accuracy.detail)
+    );
+
+    // What kind of wrong, when there is a kind worth naming. A constant lean is
+    // the one fault a researcher can see in the heatmap and misread as a
+    // finding, so it is said out loud rather than folded into the average.
+    const lean = describeBias(outcome.bias);
+    if (lean) verdict.append(el("p", { class: "muted" }, lean));
+
     clear(actions);
     actions.append(
-      el(
-        "div",
-        { class: `accuracy accuracy-${accuracy.grade}`, role: "status" },
-        el("strong", {}, accuracy.label),
-        el("p", { class: "muted" }, accuracy.detail)
-      ),
+      verdict,
       el(
         "button",
         {
           class: "btn btn-primary",
           type: "button",
-          onclick: () => void beginRecording(outcome.validationError),
+          onclick: () => void beginRecording(outcome),
         },
         "Start recording"
       ),
       el("button", { class: "btn", type: "button", onclick: () => void calibrateThenRecord() }, "Recalibrate")
     );
+  };
+
+  /**
+   * Reuses a stored calibration, but measures it again first.
+   *
+   * The old behaviour installed the model and went straight to recording,
+   * carrying the accuracy figure from the sitting it was fitted in. Nothing in
+   * that path could notice that the participant had since shifted in their
+   * chair — and a shifted participant is exactly a constant offset, the failure
+   * that puts a confident, correctly-shaped heat blob in the wrong place. Five
+   * dots is a cheap price for knowing.
+   */
+  const reuseCalibration = async (stored: StoredCalibration): Promise<void> => {
+    clear(actions);
+    clearOutcome();
+    engine.setModel(deserialiseModel(stored.model));
+
+    let outcome: CalibrationOutcome;
+    try {
+      outcome = await recheckAccuracy(engine, app);
+    } catch (err) {
+      engine.setModel(null);
+      setOutcome(
+        err instanceof Error && err.message
+          ? err.message
+          : "The accuracy check failed. Calibrate again.",
+        "bad"
+      );
+      renderActions();
+      return;
+    }
+
+    if (outcome.cancelled) {
+      // An unmeasured reuse is the thing this function exists to prevent, so a
+      // cancelled check does not fall back to using the model anyway.
+      engine.setModel(null);
+      setOutcome("Accuracy check cancelled, so the stored calibration was not reused.");
+      renderActions();
+      return;
+    }
+
+    // Persist the corrected model and the freshly measured error. savedAt is
+    // deliberately not refreshed: the fit is still as old as it was, and its
+    // age is what the reuse button reports.
+    const model = engine.getModel();
+    if (model) {
+      storeCalibration({
+        ...stored,
+        model: serialiseModel(model),
+        validationError: outcome.validationError,
+      });
+    }
+
+    presentAccuracy(outcome);
   };
 
   /** Whether the tracker is returning gaze it would fit a model on, held
@@ -1698,10 +1779,7 @@ async function runSession(study: Study): Promise<void> {
           {
             class: "btn",
             type: "button",
-            onclick: () => {
-              engine.setModel(deserialiseModel(stored.model));
-              void beginRecording(stored.validationError);
-            },
+            onclick: () => void reuseCalibration(stored),
           },
           `Reuse calibration (${age}m old)`
         )

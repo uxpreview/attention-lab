@@ -1,6 +1,7 @@
 import { newId, saveRecording } from "../data/store";
 import type { Recording, Study } from "../data/types";
 import type { GazeEngine } from "../tracker/gaze";
+import type { BiasEstimate, ResidualSample } from "../tracker/regression";
 import { confirmButton, el, inertSiblings, nextFrame } from "./dom";
 
 /**
@@ -17,6 +18,11 @@ export interface RecordOptions {
   engine: GazeEngine;
   participant: string;
   validationError: number | null;
+  /** The residuals behind `validationError`, and the offset taken out of them.
+   * Stored with the recording so a doubtful heatmap can be diagnosed rather
+   * than only re-run — see RecordingQuality. */
+  residuals: ResidualSample[];
+  bias: BiasEstimate | null;
   /** Draws a live gaze dot. Useful for demos, distracting for real studies. */
   showGazeDot: boolean;
 }
@@ -374,6 +380,8 @@ export async function runRecording(
     points,
     quality: {
       validationError: options.validationError,
+      calibrationResiduals: options.residuals,
+      calibrationBias: options.bias,
       trackingRatio: totalCount > 0 ? insideCount / totalCount : 0,
       meanFps: engine.tracker.fps,
       viewportWidth: window.innerWidth,

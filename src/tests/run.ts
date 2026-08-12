@@ -65,9 +65,14 @@ import {
   deserialiseModel,
   fitRidge,
   isSerialisedModel,
+  MAX_CORRECTABLE_BIAS_PX,
+  measureBias,
   predict,
   serialiseModel,
+  withBias,
+  type ResidualSample,
 } from "../tracker/regression";
+import { describeBias } from "../ui/calibration";
 
 let failures = 0;
 let checks = 0;
@@ -455,6 +460,154 @@ section("Stored calibration guard");
   check(
     "rejects payloads that are not models at all",
     !isSerialisedModel(null, 3) && !isSerialisedModel("{}", 3) && !isSerialisedModel({}, 3)
+  );
+
+  // Bias is optional so calibrations stored before it existed still load, but a
+  // non-finite offset would silently displace every gaze point — the same
+  // confidently-wrong failure the rest of this guard exists to catch.
+  const { biasX: _x, biasY: _y, ...legacy } = data;
+  check("accepts a calibration stored before bias correction existed", isSerialisedModel(legacy, 3));
+  check(
+    "and loads it with no correction rather than undefined",
+    deserialiseModel(legacy as typeof data).biasX === 0
+  );
+  check("rejects a non-finite offset", !isSerialisedModel({ ...data, biasY: NaN }, 3));
+  check("rejects a non-numeric offset", !isSerialisedModel({ ...data, biasX: "12" }, 3));
+}
+
+section("Constant offset: telling it apart from scatter, and taking it out");
+{
+  const at = (dx: number, dy: number, i = 0): ResidualSample => ({
+    targetX: 200 + i * 200,
+    targetY: 150 + i * 120,
+    dx,
+    dy,
+  });
+
+  // A model that leans: every dot missed the same way. This is the fault a
+  // single averaged error cannot name and the only one that can be subtracted.
+  const leaning = measureBias([at(40, -70, 0), at(38, -66, 1), at(44, -72, 2), at(39, -69, 3), at(41, -71, 4)]);
+  check(
+    "reads a consistent lean as an offset",
+    Math.abs(leaning.x - 40) < 3 && Math.abs(leaning.y + 70) < 3,
+    `(${leaning.x.toFixed(0)}, ${leaning.y.toFixed(0)})`
+  );
+  check("and reports the leftover spread as small", leaning.scatter < 6, `${leaning.scatter.toFixed(1)}px`);
+  check("an offset this size is correctable", leaning.correctable);
+
+  // The same mean error, arranged as scatter instead. Nothing here should be
+  // subtracted: there is no direction to subtract.
+  const scattered = measureBias([at(80, 0, 0), at(-80, 0, 1), at(0, 80, 2), at(0, -80, 3), at(0, 0, 4)]);
+  check(
+    "reads symmetric scatter as no offset at all",
+    Math.hypot(scattered.x, scattered.y) < 12,
+    `(${scattered.x.toFixed(0)}, ${scattered.y.toFixed(0)})`
+  );
+  check("but does report the spread", scattered.scatter > 40, `${scattered.scatter.toFixed(0)}px`);
+
+  // Five dots is few enough that one blink or glance away would drag a mean
+  // correction with it, which is why the offset is a component-wise median.
+  const oneBadDot = measureBias([at(40, -70, 0), at(38, -66, 1), at(44, -72, 2), at(39, -69, 3), at(600, 900, 4)]);
+  check(
+    "one bad dot does not drag the correction",
+    Math.abs(oneBadDot.x - 40) < 5 && Math.abs(oneBadDot.y + 70) < 5,
+    `(${oneBadDot.x.toFixed(0)}, ${oneBadDot.y.toFixed(0)})`
+  );
+
+  // Past a point an offset is not a settled posture, it is a calibration that
+  // has stopped describing this participant. Subtracting it would hand back
+  // gaze that looks plausible and is not.
+  const huge = MAX_CORRECTABLE_BIAS_PX + 60;
+  check("refuses an offset too large to be posture", !measureBias([at(huge, 0), at(huge, 0), at(huge, 0)]).correctable);
+  check("and says so rather than silently declining", (describeBias(measureBias([at(huge, 0), at(huge, 0), at(huge, 0)])) ?? "").includes("Recalibrate"));
+
+  check("no residuals means no correction", !measureBias([]).correctable);
+
+  // The wording is the participant-facing half: it has to name the direction
+  // the gaze *landed*, not the sign of the residual behind it.
+  check(
+    "names the direction the gaze landed, not the sign of the residual",
+    (describeBias(leaning) ?? "").includes("70px above"),
+    describeBias(leaning) ?? "(nothing said)"
+  );
+  check("says nothing about an offset inside the noise", describeBias(measureBias([at(3, -4), at(2, -5), at(4, -3)])) === null);
+}
+
+section("Correcting the offset moves the gaze back");
+{
+  const rand = makeRandom(77);
+  const { rows, targetX, targetY } = buildCalibrationData(0.004, rand);
+  const model = fitRidge(rows, targetX, targetY);
+
+  const features = buildFeatureVector(
+    simulateFace(600, 500, { yaw: 0.01, pitch: 0, x: 0.5, y: 0.5, scale: 0.62 }, 0, rand)
+  );
+  const [rawX, rawY] = predict(model, features);
+  const [shiftedX, shiftedY] = predict(withBias(model, { x: 30, y: -20 }), features);
+  check(
+    "an offset subtracts exactly, in both axes",
+    Math.abs(shiftedX - (rawX - 30)) < 1e-9 && Math.abs(shiftedY - (rawY + 20)) < 1e-9
+  );
+  check("a fresh fit carries no offset, because the intercept absorbed it", model.biasX === 0 && model.biasY === 0);
+  check(
+    "an offset survives being persisted and reloaded",
+    deserialiseModel(serialiseModel(withBias(model, { x: 30, y: -20 }))).biasY === -20
+  );
+
+  /**
+   * The case this was all built for: a participant who calibrates, then settles
+   * into their chair before recording. Their model is the right shape in the
+   * wrong place, and until now nothing in the app could notice — reusing a
+   * stored calibration carried its original accuracy figure forward untouched.
+   */
+  const settle = 0.12;
+  const seated = (r: () => number) => ({
+    yaw: 0.02 + (r() - 0.5) * 0.04,
+    pitch: -0.03 + settle + (r() - 0.5) * 0.03,
+    x: 0.5 + (r() - 0.5) * 0.012,
+    y: 0.48 + settle * 0.35 + (r() - 0.5) * 0.012,
+    scale: 0.62 + (r() - 0.5) * 0.005,
+  });
+
+  // The five-dot accuracy check, as the app runs it.
+  const VALIDATION: Array<[number, number]> = [[0.2, 0.2], [0.8, 0.2], [0.5, 0.35], [0.2, 0.8], [0.8, 0.8]];
+  const residuals: ResidualSample[] = VALIDATION.map(([nx, ny]) => {
+    const tx = nx * SCREEN_W;
+    const ty = ny * SCREEN_H;
+    const dxs: number[] = [];
+    const dys: number[] = [];
+    for (let s = 0; s < 27; s++) {
+      const [px, py] = predict(model, buildFeatureVector(simulateFace(tx, ty, seated(rand), 0.004, rand)));
+      dxs.push(px - tx);
+      dys.push(py - ty);
+    }
+    dxs.sort((a, b) => a - b);
+    dys.sort((a, b) => a - b);
+    return { targetX: tx, targetY: ty, dx: dxs[13], dy: dys[13] };
+  });
+
+  const bias = measureBias(residuals);
+  check("the settle shows up as an offset worth correcting", bias.correctable && Math.hypot(bias.x, bias.y) > 20, `${Math.hypot(bias.x, bias.y).toFixed(0)}px`);
+
+  const corrected = withBias(model, bias);
+  let before = 0;
+  let after = 0;
+  const trials = 900;
+  for (let i = 0; i < trials; i++) {
+    const tx = (0.08 + rand() * 0.84) * SCREEN_W;
+    const ty = (0.08 + rand() * 0.84) * SCREEN_H;
+    const face = buildFeatureVector(simulateFace(tx, ty, seated(rand), 0.004, rand));
+    const [ax, ay] = predict(model, face);
+    const [bx, by] = predict(corrected, face);
+    before += Math.hypot(ax - tx, ay - ty);
+    after += Math.hypot(bx - tx, by - ty);
+  }
+  before /= trials;
+  after /= trials;
+  check(
+    "correcting it measurably improves gaze the model never saw",
+    after < before * 0.9,
+    `${before.toFixed(0)}px → ${after.toFixed(0)}px`
   );
 }
 

@@ -1,4 +1,5 @@
 import type { Aoi } from "../analysis/aoi";
+import type { BiasEstimate, ResidualSample } from "../tracker/regression";
 
 /**
  * A study is a stimulus plus a task prompt. Recordings belong to a study, one
@@ -37,6 +38,20 @@ export interface Recording {
 export interface RecordingQuality {
   /** Mean validation error in pixels, measured after calibration. */
   validationError: number | null;
+  /**
+   * The per-dot validation residuals behind {@link validationError}, and the
+   * constant offset extracted from them.
+   *
+   * Kept because the scalar above cannot say what kind of wrong a recording is,
+   * and the kinds want different responses: an offset means the heat is the
+   * right shape in the wrong place, scatter means the kernel is too tight, and
+   * only the first can be subtracted. Without these a doubtful heatmap can only
+   * be re-run, never diagnosed.
+   *
+   * Optional: recordings saved before this was captured have neither.
+   */
+  calibrationResiduals?: ResidualSample[];
+  calibrationBias?: BiasEstimate | null;
   /** Fraction of expected samples actually captured. */
   trackingRatio: number;
   meanFps: number;

@@ -24,6 +24,19 @@ export interface RidgeModel {
   cvError: number;
   /** Number of samples the model was fit on. */
   sampleCount: number;
+  /**
+   * A constant offset subtracted from every prediction, in target units.
+   *
+   * The fit itself cannot carry this: least squares puts the intercept exactly
+   * where the calibration data says it belongs, so a freshly fitted model has
+   * no constant error by construction. Bias appears *after* fitting — the
+   * participant settles into the chair, or a calibration is reused in a later
+   * sitting — and it is the one component of gaze error that can be measured
+   * and removed rather than merely reported. {@link measureBias} estimates it
+   * from the validation dots; zero until something measures it.
+   */
+  biasX: number;
+  biasY: number;
 }
 
 const LAMBDA_GRID = [1e-4, 1e-3, 1e-2, 1e-1, 0.5, 1, 5, 20, 100];
@@ -302,17 +315,95 @@ export function fitRidge(
     lambda: bestLambda,
     cvError: Number.isFinite(bestError) ? bestError : NaN,
     sampleCount: rows.length,
+    // A fresh fit has no constant error: the intercept absorbed it.
+    biasX: 0,
+    biasY: 0,
   };
 }
 
 export function predict(model: RidgeModel, features: ArrayLike<number>): [number, number] {
-  return predictStandardised(
+  const [x, y] = predictStandardised(
     features,
     { mean: model.mean, std: model.std },
     model.wx,
     model.wy,
     model.mean.length
   );
+  return [x - model.biasX, y - model.biasY];
+}
+
+/**
+ * The largest constant offset worth correcting, in target units (CSS pixels).
+ *
+ * Past this the offset is not a settled posture, it is a calibration that has
+ * stopped describing the participant — a different person at the keyboard, a
+ * moved laptop, a model fitted on someone else's face. Subtracting a shift that
+ * large would paper over a broken calibration and hand back gaze that looks
+ * plausible and is not, so the caller is told to recalibrate instead.
+ */
+export const MAX_CORRECTABLE_BIAS_PX = 320;
+
+export interface ResidualSample {
+  /** Where the participant was known to be looking. */
+  targetX: number;
+  targetY: number;
+  /** Where the model said they were looking, minus where they were. */
+  dx: number;
+  dy: number;
+}
+
+export interface BiasEstimate {
+  /** The constant offset to subtract, in target units. */
+  x: number;
+  y: number;
+  /** Typical distance of a residual from the offset: the part that cannot be
+   * corrected, only smoothed or re-measured. */
+  scatter: number;
+  /** False when the offset exceeds {@link MAX_CORRECTABLE_BIAS_PX}. */
+  correctable: boolean;
+}
+
+/**
+ * Splits validation residuals into the part that is a constant offset and the
+ * part that is scatter.
+ *
+ * These are different faults with different remedies and the same mean error,
+ * which is why a single averaged number cannot tell a researcher which one they
+ * have. A constant offset moves every gaze point the same way — the heatmap is
+ * the right shape in the wrong place, and subtracting the offset fixes it.
+ * Scatter is per-sample noise; no offset removes it, and the honest responses
+ * are a wider kernel or a recalibration.
+ *
+ * The offset is the component-wise median rather than the mean: five dots is
+ * few enough that one bad dot — a blink, a glance away — would otherwise drag
+ * the correction along with it.
+ */
+export function measureBias(residuals: ResidualSample[]): BiasEstimate {
+  if (residuals.length === 0) {
+    return { x: 0, y: 0, scatter: NaN, correctable: false };
+  }
+
+  const median = (values: number[]): number => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  };
+
+  const x = median(residuals.map((r) => r.dx));
+  const y = median(residuals.map((r) => r.dy));
+  const scatter = median(residuals.map((r) => Math.hypot(r.dx - x, r.dy - y)));
+
+  return {
+    x,
+    y,
+    scatter,
+    correctable: Math.hypot(x, y) <= MAX_CORRECTABLE_BIAS_PX,
+  };
+}
+
+/** A copy of `model` that subtracts `bias` from every prediction. */
+export function withBias(model: RidgeModel, bias: { x: number; y: number }): RidgeModel {
+  return { ...model, biasX: bias.x, biasY: bias.y };
 }
 
 /** Serialisable form, for persisting a calibration between sessions. */
@@ -324,6 +415,9 @@ export interface SerialisedModel {
   lambda: number;
   cvError: number;
   sampleCount: number;
+  /** Optional: calibrations stored before bias correction existed omit these. */
+  biasX?: number;
+  biasY?: number;
 }
 
 export function serialiseModel(model: RidgeModel): SerialisedModel {
@@ -335,6 +429,8 @@ export function serialiseModel(model: RidgeModel): SerialisedModel {
     lambda: model.lambda,
     cvError: model.cvError,
     sampleCount: model.sampleCount,
+    biasX: model.biasX,
+    biasY: model.biasY,
   };
 }
 
@@ -353,6 +449,15 @@ export function isSerialisedModel(data: unknown, dim: number): data is Serialise
     Array.isArray(value) &&
     value.length === length &&
     value.every((v) => typeof v === "number" && Number.isFinite(v));
+
+  // Bias is optional so calibrations stored before it existed still load, but
+  // it is checked when present: a NaN offset would silently move every gaze
+  // point, which is the same confidently-wrong failure the rest of this guard
+  // exists to catch.
+  const optionalOffset = (value: unknown): boolean =>
+    value === undefined || (typeof value === "number" && Number.isFinite(value));
+
+  if (!optionalOffset(record.biasX) || !optionalOffset(record.biasY)) return false;
 
   return (
     finiteVector(record.mean, dim) &&
@@ -377,5 +482,7 @@ export function deserialiseModel(data: SerialisedModel): RidgeModel {
     lambda: data.lambda,
     cvError: data.cvError,
     sampleCount: data.sampleCount,
+    biasX: data.biasX ?? 0,
+    biasY: data.biasY ?? 0,
   };
 }
