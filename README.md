@@ -6,7 +6,7 @@ attention numbers. Everything runs in the browser — no video, gaze data, or
 images ever leave the machine.
 
 **Try it: [attention.ryankm.com](https://attention.ryankm.com/)** — a webcam, a
-desktop browser, and about 90 seconds to calibrate. EXP-038 in
+desktop browser, and about 90 seconds to calibrate. Part of
 [the Lab](https://ryankm.com/lab).
 
 Vanilla TypeScript and Vite, one runtime dependency (MediaPipe's face

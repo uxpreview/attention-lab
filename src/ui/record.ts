@@ -533,7 +533,7 @@ function waitForStop(
       faceLost = lost;
       hint.classList.toggle("is-lost", lost);
       stimulusLayer.classList.toggle("is-lost", lost);
-      hint.textContent = lost ? "Face lost — check lighting and framing" : baseHint;
+      hint.textContent = lost ? "Face lost. Check lighting and framing" : baseHint;
     });
 
     const tick = () => {

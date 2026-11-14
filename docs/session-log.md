@@ -351,3 +351,44 @@ Unchanged: nothing has been run against a printed target grid at a fixed viewing
 distance, so the degree figures remain synthetic. That is now a sharper gap than
 it was, because the fix above makes a prediction a physical rig could check —
 lean in 30cm and the error should stay flat where it used to triple.
+
+## 2026-11-14: The site's new look
+
+**Goal.** The site was redesigned in October 2026 ("Paper Lab": off-white
+paper, near-black ink, warm grays, three typefaces) and this tool still wore
+the system before it: cream and teal, Figtree, the "Ryan McCarty." wordmark,
+the EXP number, em dashes in its copy.
+
+**What changed.**
+
+- `src/tokens.css` recopied whole from the site, as the vendoring rule asks.
+  Fonts are now Hanken Grotesk, Source Serif 4 and JetBrains Mono, self-hosted
+  in `public/fonts/` (latin subsets, variable weight).
+- The page shell follows the site's `/lab/<slug>` page: the wordmark in tracked
+  capitals with the way back as a header pill, the title at semibold, the lede
+  in the serif, the record (Kind, Status, Made with) as a facts table beside
+  the title on a laptop and under the tool on a phone, the tool on a borderless
+  surface plate, and "Notes" as a shelf with numbered rows in the serif. The
+  experiment number is off the page, as on the site.
+- The mono face is a real monospace now, so it is kept to the label voice
+  (kickers, section heads, counts). Buttons, chips and hints moved to the
+  grotesk; buttons are the site's pills.
+- The control edge (`--edge`, 3:1) stays on inputs and segmented controls.
+  Plates and cards lost their stroke, the way the site draws them.
+- The two dark rooms remap to the site's near-black band. The calibration ring
+  and the live gaze dot are marigold, the one color in the room.
+- Errors use `--signal-bad` rather than the old warm accent, which is marigold
+  now and not a text color.
+- Copy: no em dashes in anything a person reads in the app, and American
+  spelling in the legend notes. Scope captions use a middle dot ("P01 · 1 of 5
+  recordings"); two tests were updated to match.
+- The share image (`docs/design/opengraph.svg`, exported to
+  `public/opengraph.png`) is redrawn in the new system.
+
+**Left alone on purpose.** The heat ramp, the scanpath colors and the region
+palette: they are the drawing, and the tests pin their contrast. Comments that
+describe the old cream and teal as history. The README's prose.
+
+**Checked.** `npm run build`, `npm test` (241 checks), and screenshots of the
+landing page, study list, session screen, results, calibration and the task
+card at 1440 and 390 wide.

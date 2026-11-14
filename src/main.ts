@@ -91,11 +91,12 @@ function storeCalibration(value: StoredCalibration | null): void {
 }
 
 // --- The experiment page shell -------------------------------------------
-// This tool is EXP-038 in the Lab on ryankm.com and it is hosted here rather
+// This tool is part of the Lab on ryankm.com and it is hosted here rather
 // than there, so the page has to do the work the site's /lab/<slug> route
-// normally does: the trail back up, the record voice (number, kind, state,
-// then the stack), the claim in display type, and the lede. Same order, same
-// tokens, same measure. See docs/lab-strategy.md on the site, under
+// normally does: the trail back up, the title, the lede, and the record (kind,
+// state, stack) as a small facts table. Same order, same tokens, same
+// measure. The experiment number stays in the site's data and off the page,
+// as it does there. See docs/lab-strategy.md on the site, under
 // "Experiments that live off-site".
 
 /** A phone cannot run a session, and the honest thing is to say so rather than
@@ -138,7 +139,7 @@ const MIN_SESSION_EDGE = 700;
 function sessionBlockReason(): string | null {
   if (isHandheld()) return "Sessions need a laptop or a desktop";
   if (Math.min(window.innerWidth, window.innerHeight) < MIN_SESSION_EDGE) {
-    return `This window is too small to calibrate in — make it at least ${MIN_SESSION_EDGE}px in both directions`;
+    return `This window is too small to calibrate in. Make it at least ${MIN_SESSION_EDGE}px in both directions`;
   }
   return null;
 }
@@ -176,21 +177,6 @@ function experimentHead(): HTMLElement {
   // the chrome entirely — see ui/chrome.ts.
   const bar = appBar();
 
-  const meta = el(
-    "div",
-    { class: "exp-meta" },
-    el("span", { class: "label label-strong" }, "EXP-038"),
-    el("span", { class: "label" }, "tool"),
-    el(
-      "span",
-      { class: "label label-strong exp-state" },
-      el("span", { class: "status-dot", "aria-hidden": "true" }),
-      "Live"
-    ),
-    el("span", { class: "exp-rule", "aria-hidden": "true" }),
-    el("span", { class: "label exp-stack" }, "MediaPipe · Ridge regression · Client-side only")
-  );
-
   return el(
     "header",
     { class: "app-header" },
@@ -198,8 +184,7 @@ function experimentHead(): HTMLElement {
     el(
       "div",
       { class: "container exp-head" },
-      meta,
-      el("h1", { class: "t-h1" }, "Attention Lab", el("span", { class: "dot" }, ".")),
+      el("h1", { class: "t-h1" }, "Attention Lab"),
       // Two sentences, not six. This is a tool people open to run a session,
       // and the lede used to push every control below a 900px fold — the page
       // read as an essay with a tool bolted underneath. The accuracy caveat
@@ -208,9 +193,31 @@ function experimentHead(): HTMLElement {
       el(
         "p",
         { class: "t-lede" },
-        "Point a webcam at a wireframe and find out where people actually look. Upload a screen, set a task, and get back a heatmap, a scanpath, and attention numbers per region — accurate to a block rather than a word."
-      )
+        "Point a webcam at a wireframe and find out where people actually look. Upload a screen, set a task, and get back a heatmap, a scanpath, and attention numbers per region, accurate to a block rather than a word."
+      ),
+      recordFacts("exp-facts-head")
     )
+  );
+}
+
+/**
+ * The record: what kind of thing this is, its state, and what it is made with.
+ *
+ * On the site this is the facts table in the right rail of every /lab/<slug>
+ * page. It is drawn twice here and shown once: beside the title from a laptop
+ * up (`exp-facts-head`), and under the tool on anything narrower
+ * (`exp-facts-foot`), so on a phone the tool is not pushed down by a table
+ * about it. The hidden copy is `display: none`, so a screen reader meets one.
+ */
+function recordFacts(placement: string): HTMLElement {
+  const row = (k: string, ...v: Array<string | HTMLElement>): HTMLElement =>
+    el("div", {}, el("dt", {}, k), el("dd", {}, ...v));
+  return el(
+    "dl",
+    { class: `facts facts-end exp-facts ${placement}` },
+    row("Kind", "Tool"),
+    row("Status", el("span", { class: "exp-state" }, el("span", { class: "status-dot", "aria-hidden": "true" }), "Live")),
+    row("Made with", "MediaPipe · Ridge regression · Client-side only")
   );
 }
 
@@ -472,11 +479,11 @@ function windowTooSmallNotice(reason: string): HTMLElement {
   return el(
     "aside",
     { class: "panel handheld" },
-    el("p", { class: "label eyebrow" }, "Sessions are paused in this window"),
+    el("p", { class: "label" }, "Sessions are paused in this window"),
     el(
       "p",
       { class: "handheld-body" },
-      `${reason}. Calibration puts its targets at 6% and 94% of each axis, and in a window this size those land close enough to the edge that a participant's gaze leaves the screen rather than reaching the dot — the model would fit to points nobody actually looked at.`
+      `${reason}. Calibration puts its targets at 6% and 94% of each axis, and in a window this size those land close enough to the edge that a participant's gaze leaves the screen rather than reaching the dot, so the model would fit to points nobody actually looked at.`
     ),
     el(
       "p",
@@ -508,7 +515,7 @@ function handheldNotice(): HTMLElement {
   return el(
     "aside",
     { class: "panel handheld" },
-    el("p", { class: "label eyebrow" }, "Read here, run it on a desktop"),
+    el("p", { class: "label" }, "Read here, run it on a desktop"),
     el(
       "p",
       { class: "handheld-body" },
@@ -643,7 +650,7 @@ function studyCard(study: Study, stats: StudyStats): HTMLElement {
         {
           class: "btn",
           type: "button",
-          title: stats.count > 0 ? null : "No recordings yet — regions can still be drawn",
+          title: stats.count > 0 ? null : "No recordings yet. Regions can still be drawn",
           onclick: () => void openResults(study),
         },
         "Results"
@@ -907,7 +914,7 @@ function newStudyForm(
     scaleNote.classList.toggle("is-warn", scale < FIT_SCALE_FLOOR);
     scaleNote.textContent =
       scale < FIT_SCALE_FLOOR
-        ? `${width}×${height}. On a screen this size a participant sees it at about ${percent}% — small labels may be unreadable, which puts the finding in doubt rather than only the look of it. Crop it, or export the wireframe larger.`
+        ? `${width}×${height}. On a screen this size a participant sees it at about ${percent}%. Small labels may be unreadable, which puts the finding in doubt rather than only the look of it. Crop it, or export the wireframe larger.`
         : scrolls
           ? `${width}×${height}. Taller than the recording stage, so it is shown at full width (about ${percent}%) and scrolled.`
           : `${width}×${height}. Fits the recording stage at about ${percent}%.`;
@@ -1046,7 +1053,7 @@ function newStudyForm(
     // the claim in display type, then how to work it.
     el(
       "p",
-      { class: "label eyebrow" },
+      { class: "label" },
       existing ? "Edit study" : "Upload · Task · Thirteen clicks"
     ),
     el(
@@ -1088,7 +1095,7 @@ function newStudyForm(
       : el(
           "p",
           { class: "panel-lede setup-accuracy" },
-          "Gaze lands within 2 to 4 degrees of visual angle — enough to tell you which block someone read, never which word."
+          "Gaze lands within 2 to 4 degrees of visual angle: enough to tell you which block someone read, never which word."
         ),
     // At the foot of the copy column, which is where the imbalance was: the copy
     // ran out at the end of the lede while the controls column carried on
@@ -1172,8 +1179,8 @@ function field(label: string, input: HTMLElement, hint?: HTMLElement): HTMLEleme
 }
 
 
-// Bench notes, in the site's ledger voice: a label rail on the left and the
-// note beside it. Shorter than a /lab/<slug> page's set, because this one has
+// Notes, set the way a /lab/<slug> page sets them: a numbered title on the
+// left and the note beside it in the reading serif. Shorter than a /lab/<slug> page's set, because this one has
 // to earn its space above a working tool rather than below a finished one.
 const BENCH_NOTES: { k: string; v: string }[] = [
   {
@@ -1196,11 +1203,21 @@ const BENCH_NOTES: { k: string; v: string }[] = [
 
 function footer(): HTMLElement {
   const notes = el("dl", { class: "notes" });
-  for (const note of BENCH_NOTES) {
+  BENCH_NOTES.forEach((note, i) => {
     notes.append(
-      el("div", { class: "note-row" }, el("dt", { class: "label" }, note.k), el("dd", {}, note.v))
+      el(
+        "div",
+        { class: "note-row" },
+        el(
+          "dt",
+          {},
+          el("span", { class: "num", "aria-hidden": "true" }, String(i + 1).padStart(2, "0")),
+          el("span", { class: "t-card" }, note.k)
+        ),
+        el("dd", {}, note.v)
+      )
     );
-  }
+  });
 
   return el(
     "footer",
@@ -1208,12 +1225,13 @@ function footer(): HTMLElement {
     el(
       "div",
       { class: "container" },
-      el("h2", { class: "t-display notes-title" }, "Bench notes"),
+      recordFacts("exp-facts-foot"),
+      el("div", { class: "shelf" }, el("h2", { class: "eyebrow" }, "Notes")),
       notes,
       el(
         "p",
         { class: "footer-credit" },
-        el("a", { class: "arrow-link", href: LAB_URL }, "EXP-038 in the Lab at ryankm.com", el("span", { "aria-hidden": "true" }, "→"))
+        el("a", { class: "btn btn-small", href: LAB_URL }, "More in the Lab at ryankm.com", el("span", { "aria-hidden": "true" }, "→"))
       )
     )
   );
@@ -1631,7 +1649,7 @@ async function runSession(study: Study): Promise<void> {
     }
 
     if (outcome.cancelled) {
-      setOutcome("Calibration cancelled. Nothing was saved.");
+      setOutcome("Calibration canceled. Nothing was saved.");
       renderActions();
       return;
     }
@@ -1722,7 +1740,7 @@ async function runSession(study: Study): Promise<void> {
       // An unmeasured reuse is the thing this function exists to prevent, so a
       // cancelled check does not fall back to using the model anyway.
       engine.setModel(null);
-      setOutcome("Accuracy check cancelled, so the stored calibration was not reused.");
+      setOutcome("Accuracy check canceled, so the stored calibration was not reused.");
       renderActions();
       return;
     }
@@ -1756,7 +1774,7 @@ async function runSession(study: Study): Promise<void> {
     else {
       calibrateBtn.setAttribute(
         "title",
-        "Waiting for a clear view of the face — calibration cannot succeed until the camera is tracking"
+        "Waiting for a clear view of the face. Calibration cannot succeed until the camera is tracking"
       );
     }
   }
@@ -1804,7 +1822,7 @@ function describeCameraFailure(err: unknown): string {
       return "Camera access was blocked. Allow the camera in your browser settings, then try again.";
     }
     if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-      return "No camera was found. Connect one — or check that another profile has not claimed it — then try again.";
+      return "No camera was found. Connect one, or check that another profile has not claimed it, then try again.";
     }
     if (err.name === "NotReadableError") {
       return "The camera is already in use by another app or tab. Close that one, then try again.";
