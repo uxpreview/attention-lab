@@ -1784,10 +1784,10 @@ section("The results screen states one scope, not three");
   // The four statements the critic read off one screen, now.
   check(
     "the header pill names the participant a per-person view is showing",
-    scopePill(solo).text === "P01 — 1 of 5 recordings",
+    scopePill(solo).text === "P01 · 1 of 5 recordings",
     scopePill(solo).text
   );
-  check("the export rows say the same", scopeSentence(solo) === "P01 only — 1 of 5 recordings", scopeSentence(solo));
+  check("the export rows say the same", scopeSentence(solo) === "P01 only · 1 of 5 recordings", scopeSentence(solo));
   check("the PNG caption says the same", scopeCaption(solo) === "P01", scopeCaption(solo));
   check(
     "and the file note carries the reason the set is one person",

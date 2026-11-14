@@ -184,7 +184,7 @@ function recordingWord(total: number): string {
 export function scopePill(scope: ReportedScope): { text: string; title: string } {
   if (isSolo(scope)) {
     return {
-      text: `${scope.participants[0]} — 1 of ${scope.total} ${recordingWord(scope.total)}`,
+      text: `${scope.participants[0]} · 1 of ${scope.total} ${recordingWord(scope.total)}`,
       title: scope.perView
         ? "A scanpath is one person's path, so this screen is reporting on one recording"
         : "One participant is selected, so this screen is reporting on one recording",
@@ -203,7 +203,7 @@ export function scopePill(scope: ReportedScope): { text: string; title: string }
  * caption and the printed page. */
 export function scopeSentence(scope: ReportedScope): string {
   if (isSolo(scope)) {
-    return `${scope.participants[0]} only — 1 of ${scope.total} ${recordingWord(scope.total)}`;
+    return `${scope.participants[0]} only · 1 of ${scope.total} ${recordingWord(scope.total)}`;
   }
   if (scope.participants.length === scope.total) {
     return `all ${scope.total} ${recordingWord(scope.total)}`;
@@ -222,15 +222,15 @@ export function scopeSentence(scope: ReportedScope): string {
 export function scopeNote(scope: ReportedScope): string {
   if (isSolo(scope)) {
     const why = scope.perView ? " (scanpath view is per-person)" : "";
-    return `Single participant: ${scope.participants[0]} — 1 of ${scope.total} ${recordingWord(scope.total)}${why}`;
+    return `Single participant: ${scope.participants[0]} · 1 of ${scope.total} ${recordingWord(scope.total)}${why}`;
   }
   if (scope.excludingFlagged) {
-    return `All participants, low-signal excluded — ${scope.participants.length} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
+    return `All participants, low-signal excluded · ${scope.participants.length} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
   }
   if (scope.flagged > 0) {
-    return `All participants, low-signal included — ${scope.total} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
+    return `All participants, low-signal included · ${scope.total} of ${scope.total} recordings (${scope.flagged} below the quality threshold)`;
   }
-  return `All participants — ${scope.total} of ${scope.total} ${recordingWord(scope.total)}`;
+  return `All participants · ${scope.total} of ${scope.total} ${recordingWord(scope.total)}`;
 }
 
 /**
@@ -355,7 +355,7 @@ export async function renderResults(
   // study used to print this line and the placeholder's on the same baselines,
   // one translucent layer over the other, and the two texts interleaved
   // character for character.
-  const emptyLine = "No recordings yet — run a session to see attention here.";
+  const emptyLine = "No recordings yet. Run a session to see attention here.";
 
   /** The way out of an empty results screen. Prose telling someone to navigate
    * back is not a way out; the button that does the thing is. */
@@ -508,7 +508,7 @@ export async function renderResults(
         // column in the `close` handler below.
         if (hasRecordings) lightbox.append(legend);
         lightboxScope.textContent = hasRecordings
-          ? `${study.name} — ${scopeSummary()}`
+          ? `${study.name} · ${scopeSummary()}`
           : study.name;
         lightboxHint.hidden = !canRotate();
         lightbox.showModal();
@@ -844,7 +844,7 @@ export async function renderResults(
       if (!note) continue;
       note.textContent =
         item.dataset.key === "export-json"
-          ? `archive — all ${total} recording${plural}, low signal included`
+          ? `archive, all ${total} recording${plural}, low signal included`
           : scoped;
     }
   }
@@ -1319,7 +1319,7 @@ export async function renderResults(
         { class: "brief-task" },
         study.task
           ? `“${study.task}”`
-          : "No task set — a free-viewing heatmap mostly shows where the biggest image is."
+          : "No task set. A free-viewing heatmap mostly shows where the biggest image is."
       )
     );
 
@@ -1367,7 +1367,7 @@ export async function renderResults(
             "li",
             {},
             noStimulusYet
-              ? "Draw regions afterwards — on a live page they are anchored to the recorded viewport."
+              ? "Draw regions afterwards: on a live page they are anchored to the recorded viewport."
               : "Draw regions on the stimulus. Regions drawn now apply to every session run afterwards."
           ),
           el("li", {}, "Heatmap, spotlight, contour and scanpath views arrive with the first recording.")
@@ -1442,7 +1442,7 @@ export async function renderResults(
           "option",
           { value: a.recording.id, ...(selected === a.recording.id ? { selected: true } : {}) },
           isLowSignal(a.recording.quality)
-            ? `${a.recording.participant} — low signal`
+            ? `${a.recording.participant} · low signal`
             : a.recording.participant
         )
       )
@@ -1524,7 +1524,7 @@ export async function renderResults(
       el(
         "h3",
         {},
-        soloScanpath ? `Summary — ${statSet[0].recording.participant}` : "Summary"
+        soloScanpath ? `Summary · ${statSet[0].recording.participant}` : "Summary"
       ),
       statRow("Fixations", String(stats.fixationCount)),
       statRow("Mean fixation", formatMs(stats.meanFixationDuration)),
@@ -1574,7 +1574,7 @@ export async function renderResults(
      */
     const noStimulusYet = study.stimulus.kind === "url" && !hasRecordings;
     const drawBlockedReason =
-      "Run a session first — regions on a live page are anchored to the recorded viewport.";
+      "Run a session first: regions on a live page are anchored to the recorded viewport.";
 
     const section = el(
       "section",

@@ -212,7 +212,7 @@ async function runFlow(
   const lostHint = el(
     "p",
     { class: "calib-lost", role: "status", hidden: true },
-    "Face lost — move back into frame and check your lighting"
+    "Face lost. Move back into frame and check your lighting"
   );
   const dot = el(
     "button",
@@ -325,7 +325,7 @@ async function runFlow(
       instruction.classList.remove("is-dim");
       heading.textContent = "Accuracy check";
       guidance.textContent =
-        "Five more dots — the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
+        "Five more dots, the last of it. Same again: click, then hold until the ring completes. These measure how accurate the calibration actually is.";
     }
 
     const done = recheck ? 0 : CALIBRATION_POINTS.length;
@@ -719,7 +719,7 @@ export function describeBias(bias: BiasEstimate | null): string | null {
   const magnitude = Math.hypot(bias.x, bias.y);
   if (!bias.correctable) {
     return (
-      `Gaze is landing ${Math.round(magnitude)}px from where you look — too far off to correct. ` +
+      `Gaze is landing ${Math.round(magnitude)}px from where you look, too far off to correct. ` +
       `Recalibrate rather than trusting this.`
     );
   }

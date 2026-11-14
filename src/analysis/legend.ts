@@ -216,7 +216,7 @@ export function legendFor(
         // to, and it is a percentile of the per-blob peaks rather than of the
         // pixels — see fieldCeiling. It said "98th" for a clamp that no longer
         // exists.
-        note: "Colour is total fixation duration (ms) summed over the selected participants, scaled so the 90th percentile of the attention peaks saturates the hot end — the figure printed at the top of the axis, which anything hotter reaches too. Areas nobody fixated are left clear rather than tinted, so the paint is the finding. The scale is relative to this selection — colours are not comparable between studies.",
+        note: "Color is total fixation duration (ms) summed over the selected participants, scaled so the 90th percentile of the attention peaks saturates the hot end: the figure printed at the top of the axis, which anything hotter reaches too. Areas nobody fixated are left clear rather than tinted, so the paint is the finding. The scale is relative to this selection, so colors are not comparable between studies.",
       };
     case "contour":
       return {
@@ -249,7 +249,7 @@ export function legendFor(
         ticks: null,
         swatches: null,
         caption: `The stimulus dimmed everywhere except where fixations landed.${blurClause(scale)}`,
-        note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed, and a fully revealed area is the stimulus at full strength — never brighter. The dim stops short of black, so the rest of the screen stays legible as context rather than disappearing. Reveal is boosted, so a moderately-attended region clears.",
+        note: "A mask rather than a heat overlay: the stimulus is dimmed everywhere except where fixations landed, and a fully revealed area is the stimulus at full strength, never brighter. The dim stops short of black, so the rest of the screen stays legible as context rather than disappearing. Reveal is boosted, so a moderately-attended region clears.",
       };
     case "scanpath":
       return {
@@ -271,7 +271,7 @@ export function legendFor(
         // is what stops the picture reading as "1, 32, 14, 25" — so a reader who
         // counts circles and numbers and finds they disagree is owed the reason
         // in the caption rather than left to guess at it.
-        note: "Circle area is dwell time, and colour runs dark for the first fixation through light for the last. Where fixations pile up, only the longest are numbered — the numerals count those marks in order, 1, 2, 3, and the unnumbered circles are the shorter stops between them, drawn in the same path. Every fixation keeps its true position in the sequence in the exported Fixations CSV. One participant at a time — an averaged scanpath would be a path nobody took.",
+        note: "Circle area is dwell time, and color runs dark for the first fixation through light for the last. Where fixations pile up, only the longest are numbered: the numerals count those marks in order, 1, 2, 3, and the unnumbered circles are the shorter stops between them, drawn in the same path. Every fixation keeps its true position in the sequence in the exported Fixations CSV. One participant at a time, because an averaged scanpath would be a path nobody took.",
       };
     case "raw":
       return {

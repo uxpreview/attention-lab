@@ -9,7 +9,7 @@ import type { Fixation } from "./fixations";
  * read a CSS custom property, so `--font-display` has to be mirrored here; if
  * the two ever disagree the numerals on the stage render in a different
  * typeface from every label around them. */
-export const CANVAS_FONT_FAMILY = '"Figtree", ui-sans-serif, system-ui, sans-serif';
+export const CANVAS_FONT_FAMILY = '"Hanken Grotesk", ui-sans-serif, system-ui, sans-serif';
 
 /**
  * The order ramp: first to last, dark to light.

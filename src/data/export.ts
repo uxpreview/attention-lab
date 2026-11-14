@@ -178,12 +178,12 @@ export function exportAoiCsv(
  * read a custom property, so these are the one place in the app where the
  * palette is repeated — kept to four values, all from :root.
  */
-const CAPTION_BG = "#fef6e9";
-const CAPTION_LINE = "#e5dac6";
-const CAPTION_STRONG = "#182528";
-const CAPTION_MUTED = "#5f6e73";
+const CAPTION_BG = "#faf9f5";
+const CAPTION_LINE = "#e8e6dc";
+const CAPTION_STRONG = "#141413";
+const CAPTION_MUTED = "#5e5d59";
 /** --accent. Region ink, on the image rather than in the caption. */
-const CAPTION_ACCENT = "#003f48";
+const CAPTION_ACCENT = "#141413";
 
 export interface OverlayExportContext {
   mode: OverlayMode;

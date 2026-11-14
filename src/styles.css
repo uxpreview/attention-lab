@@ -1,52 +1,55 @@
 /* Attention Lab, wearing the ryankm.com design system.
  *
- * This tool is EXP-038 in the Lab and is hosted on its own subdomain, so the
+ * This tool is part of the Lab and is hosted on its own subdomain, so the
  * page has to do the work the site's /lab/<slug> route normally does: the
- * trail back up, the record voice, the claim in display type, the lede, the
- * experiment, then bench notes. The shape below is that route's shape.
+ * trail back up, the title, the lede, the record as a facts table, the
+ * experiment on its plate, then notes. The shape below is that route's shape.
  *
- * Colors, radii, easings and the measure come from src/tokens.css, a vendored
- * copy of the site's tokens that is never edited on this side.
+ * Colors, radii, easings, the measure and the three typefaces come from
+ * src/tokens.css, a vendored copy of the site's tokens that is never edited on
+ * this side. The system is "Paper Lab" (the site's October 2026 redesign): a
+ * warm off-white paper, one near-black ink, warm grays, and color only where
+ * it is data.
  *
  * The site's conventions doing most of the work here:
- *   the label voice   — 12px, 500, uppercase, 0.12em tracking, muted.
- *                       Structural eyebrows only: the record line (EXP-038,
- *                       the stack), section headings, the trail back, and the
- *                       one badge that has to read as a stamp. Buttons, chips,
- *                       stat labels, field labels and table headers are
- *                       sentence case at 13px — the voice stops being a voice
- *                       when everything on the screen is speaking in it
- *   the card recipe   — surface ground, hairline stroke, 12px radius, stroke
- *                       warms toward the accent on hover. No lift, no shadow
- *   the chase line    — underlines draw in from the left, exit right
- *   two rule weights  — hairline for rhythm, heavy for section breaks
+ *   three voices      — the grotesk for UI and headings (semibold 600, card
+ *                       titles 700, never 800); the serif for the lede and
+ *                       the notes; the mono for the label voice only: 11.5px
+ *                       uppercase kickers, table heads, counts. Buttons,
+ *                       chips, field labels and anything a person presses are
+ *                       sentence-case grotesk, never mono
+ *   the plate         — the experiment sits on a --surface panel with a 16px
+ *                       radius and no border or shadow. Controls on it are
+ *                       paper-filled so they read against the plate
+ *   ink is the accent — links, focus, the one filled button. Color on this
+ *                       page is a measurement (signal good / warn / bad) or
+ *                       the drawing (heat, scanpath, regions), nothing else
+ *   hairlines         — --line for rhythm inside a container, the shelf for
+ *                       a section's label row
  */
 
 @import "./tokens.css";
 
 /* --- The container edge ------------------------------------------------ */
-/* One border colour for everything that is a box you can see the edge of.
+/* One border colour for every control you can see the edge of.
  *
- * The vendored hairline is rhythm ink, not structure: --line #e5dac6 on
- * --surface #f8eedd measures 1.20:1, and --surface on --bg measures 1.07:1, so
- * a panel was a 1.07:1 fill inside a 1.20:1 outline and the results screen read
- * as one continuous field of cream. .btn had already diagnosed this and mixed a
- * quarter of --strong into the hairline for itself — but a quarter lands at
- * 1.95:1 on --surface, not the ~3:1 that comment claimed, and it was applied to
- * exactly one component.
+ * The vendored hairlines are rhythm ink, not structure: --line on --surface
+ * measures about 1.1:1, which is right for a divider and not enough for the
+ * boundary of something you type into or press. 45% of --strong mixed into
+ * the hairline lands at #898882: 3.4:1 on the paper and 3.2:1 on --surface,
+ * which clears the 3:1 that WCAG 1.4.11 asks of a component boundary. It is
+ * declared once and used by inputs, selects, checkboxes, segmented controls
+ * and the stage frame, so there is one number to change.
  *
- * 45% of --strong is what actually reaches the 3:1 WCAG 1.4.11 asks of a
- * component boundary: #898879-ish, 3.08:1 on --surface and 3.30:1 on --bg. It
- * is declared once and used by every container and control, so there is one
- * number to change rather than a sprinkle of overrides.
- *
- * --line keeps its job: rules *inside* a container — .stat-row, .data-table td,
- * .note-row, .recording-list li — where a 3:1 stroke would turn a table into a
- * grid of boxes.
+ * Containers do not wear it. A plate is a --surface ground with no stroke at
+ * all, the way the site draws every card and Lab plate, and a card inside a
+ * plate is paper with a hairline (--line-2, the hairline that survives on
+ * --surface). --line keeps its job: rules *inside* a container — .stat-row,
+ * .data-table td, .note-row, .recording-list li.
  *
  * Custom properties resolve their var()s on the element that declares them, so
  * the dark rooms redeclare this against their own remapped tokens rather than
- * inheriting a cream-derived colour (see .calib-overlay, .record-stage). */
+ * inheriting a paper-derived colour (see .calib-overlay, .record-stage). */
 :root {
   --edge: color-mix(in srgb, var(--strong) 45%, var(--line));
 }
@@ -94,11 +97,11 @@ label,
   margin: 0 auto;
   width: 100%;
   max-width: var(--maxw);
-  padding: 0 24px;
+  padding: 0 20px;
 }
 @media (min-width: 768px) {
   .container {
-    padding: 0 40px;
+    padding: 0 32px;
   }
 }
 
@@ -170,55 +173,95 @@ label,
 
 /* --- Type ------------------------------------------------------------- */
 
-.label,
-.eyebrow {
+/* Two small voices, kept apart the way the site keeps them.
+   .label   the mono register: kickers, table heads, counts. 11.5px JetBrains
+            Mono, uppercase, lightly tracked. Never below 11px.
+   .eyebrow the section label: 13px grotesk, semibold, ink, sentence case,
+            inside a .shelf. */
+.label {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  font-weight: 400;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .label-strong {
   color: var(--strong);
 }
-
-/* The display size is capped lower than the site's hero, on purpose. This page
-   is a tool, and at 112px the headline plus its lede pushed every control below
-   a 900px fold: the first screen was all masthead and no instrument. */
-.t-h1 {
+.eyebrow {
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: clamp(44px, 6.6vw, 78px);
-  line-height: 0.92;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.005em;
+  text-transform: none;
+  color: var(--strong);
+  margin: 0;
+}
+/* Section label row: hairline above and below, label left. */
+.shelf {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+/* Mono index: 01, 02. */
+.num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+/* Card and list-row title. */
+.t-card {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
   color: var(--strong);
   text-wrap: balance;
-  margin: 24px 0 0;
+}
+
+/* The site's .t-h1: the grotesk at semibold, confident, not shouting. This is
+   a tool, so the title stays at the site's laptop size and does not grow past
+   it: at the old 78px the headline plus its lede pushed every control below a
+   900px fold, and the first screen was all masthead and no instrument. */
+.t-h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(38px, 4.6vw, 64px);
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  color: var(--strong);
+  text-wrap: balance;
+  margin: 0;
   max-width: 16ch;
 }
 .t-display {
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(30px, 3.8vw, 54px);
-  line-height: 1.04;
-  letter-spacing: -0.015em;
+  font-weight: 600;
+  font-size: clamp(28px, 3vw, 44px);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
   color: var(--strong);
   text-wrap: balance;
   margin: 0;
-  max-width: 18ch;
+  max-width: 22ch;
 }
+/* The lede is the serif: the quiet half of the page's opening. */
 .t-lede {
-  font-size: clamp(18px, 1.6vw, 21px);
-  line-height: 1.55;
+  font-family: var(--font-serif);
+  font-size: clamp(19px, 1.6vw, 22px);
+  line-height: 1.5;
   color: var(--body-2);
   text-wrap: pretty;
-  max-width: 58ch;
+  max-width: 60ch;
   margin: 24px 0 0;
-}
-/* The wordmark dot: the site's one vermillion accent in display type. */
-.dot {
-  color: var(--accent-warm);
 }
 
 h2 {
@@ -234,9 +277,9 @@ h2 {
    it takes the label voice. .study-body h3 opts back out below. */
 h3 {
   font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  font-weight: 400;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
   margin: 28px 0 10px;
@@ -253,14 +296,14 @@ p {
   color: var(--muted);
 }
 .error {
-  color: var(--accent-warm-ink);
+  color: var(--signal-bad);
   min-height: 20px;
 }
 .note {
   color: var(--body-2);
   font-size: 13.5px;
   background: var(--tint);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line-2);
   padding: 12px 14px;
   border-radius: 8px;
 }
@@ -269,103 +312,159 @@ p {
 
 /* A bar, not a breadcrumb. A breadcrumb claims same-origin hierarchy, and
    both links here leave the origin. The wordmark carries the brand where a
-   visitor expects to find it, and the heavy rule under it is the site's
-   section rule rather than a hairline: this is a boundary, not rhythm. */
+   visitor expects to find it. The bar is the site's header: 72px, paper, no
+   rule under it (whitespace does that job on the site). */
 .site-bar {
-  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
 }
 .bar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 18px;
-  padding-bottom: 18px;
+  height: var(--header-h);
 }
-/* Matches the site header exactly: 20px, 700, -0.02em, and the dot pops in
-   on load the way the site's does. */
+/* The site's wordmark: the full name in tracked bold capitals, 17px on a
+   phone and 19px from a tablet. The markup says "Ryan McCarty"; the capitals
+   are presentation. */
 .wordmark {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 20px;
-  letter-spacing: -0.02em;
+  font-size: 17px;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--strong);
   text-decoration: none;
   white-space: nowrap;
 }
-.wordmark .dot {
-  display: inline-block;
-  transform-origin: 50%;
-  animation: dot-pop 0.36s var(--ease-expo) both;
-}
-@keyframes dot-pop {
-  0% {
-    transform: scale(0);
-  }
-  60% {
-    transform: scale(1.08);
-  }
-  to {
-    transform: scale(1);
+@media (min-width: 768px) {
+  .wordmark {
+    font-size: 19px;
   }
 }
+/* The site header's pill: 28px tall, 13px label, surface fill and a hairline. */
 .bar-back {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent-ink);
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--r-chip);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--strong);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1;
   text-decoration: none;
   white-space: nowrap;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease;
 }
-.bar-back::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: -3px;
-  height: 1.5px;
-  width: 100%;
-  background: currentColor;
-  transform: scaleX(0);
-  transform-origin: right center;
-  transition: transform var(--dur-struct) var(--ease-expo);
+.bar-back:hover {
+  background: var(--surface-2);
+  border-color: var(--line-2);
 }
-.bar-back span {
-  transition: transform 0.2s ease;
-}
-@media (hover: hover) and (pointer: fine) {
-  .bar-back:hover::after {
-    transform: scaleX(1);
-    transform-origin: left center;
+/* On touch the hit area grows to a thumb's height without moving anything. */
+@media (pointer: coarse) {
+  .bar-back {
+    position: relative;
   }
-  .bar-back:hover span {
-    transform: translateY(-2px);
+  .bar-back::after {
+    content: "";
+    position: absolute;
+    inset: -8px -3px;
   }
 }
 
+/* Head matter, the way a /lab/<slug> page sets it: the title and the lede on
+   the left and, from a laptop up, the record as a facts table in a right rail
+   whose last row sits on the lede's baseline. */
 .exp-head {
-  padding-top: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 64px;
+  padding-top: 28px;
+}
+.exp-head > .t-h1,
+.exp-head > .t-lede {
+  grid-column: 1;
 }
 @media (min-width: 768px) {
   .exp-head {
-    padding-top: 56px;
+    padding-top: 40px;
+  }
+}
+@media (min-width: 1024px) {
+  .exp-head {
+    grid-template-columns: minmax(0, 1fr) 400px;
+    align-items: end;
+  }
+  .exp-head > .exp-facts-head {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-bottom: 6px;
   }
 }
 
-/* Record voice: number, kind, state, then a rule that runs out to the stack. */
-.exp-meta {
+/* Label / value fact rows on hairlines: the site's .facts, with .facts-end
+   pushing the value to the right edge for a narrow rail. */
+.facts {
+  margin: 0;
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 16px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.facts > div:last-child {
+  border-bottom: 1px solid var(--line);
+}
+.facts dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--strong);
+}
+.facts-end > div {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 20px;
+  justify-content: space-between;
+}
+.facts-end dt {
+  flex: none;
+}
+.facts-end dd {
+  text-align: right;
+}
+/* The record is drawn twice and shown once: in the head's right rail from a
+   laptop up, under the tool below that, so a phone reaches the tool first. */
+.exp-facts-head {
+  display: none;
+}
+.exp-facts-foot {
+  margin-bottom: 40px;
+}
+@media (min-width: 1024px) {
+  .exp-facts-head {
+    display: block;
+  }
+  .exp-facts-foot {
+    display: none;
+  }
 }
 .exp-state {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
 }
@@ -373,21 +472,7 @@ p {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent);
-}
-.exp-rule {
-  flex: 1;
-  min-width: 40px;
-  height: 1px;
-  background: var(--line);
-}
-.exp-stack {
-  display: none;
-}
-@media (min-width: 640px) {
-  .exp-stack {
-    display: block;
-  }
+  background: var(--strong);
 }
 
 .exp-body {
@@ -417,20 +502,19 @@ p {
  */
 @media (min-height: 640px) and (max-height: 950px) {
   .t-h1 {
-    font-size: clamp(40px, 4.4vw, 60px);
-    margin-top: 18px;
+    font-size: clamp(38px, 4vw, 56px);
   }
   .t-lede {
     margin-top: 18px;
   }
   .exp-head {
-    padding-top: 32px;
+    padding-top: 24px;
   }
   .exp-body {
     padding-top: 32px;
   }
   .setup-copy .t-display {
-    font-size: clamp(28px, 3vw, 40px);
+    font-size: clamp(26px, 2.6vw, 36px);
   }
   .panel-lede {
     margin: 14px 0 20px;
@@ -444,7 +528,8 @@ p {
   line-height: 1.6;
   margin: 16px 0 26px;
 }
-.panel .eyebrow {
+.panel > .label,
+.setup-copy > .label {
   margin: 0 0 14px;
 }
 
@@ -452,163 +537,154 @@ p {
 
 .app-footer {
   padding-top: 8px;
-  padding-bottom: 64px;
+  padding-bottom: 96px;
 }
-.notes-title {
-  max-width: 16ch;
-}
+/* Notes, set like a /lab/<slug> page's: a numbered title on the left, the
+   note in the reading serif on the right, a hairline between rows. */
 .notes {
-  margin: 32px 0 0;
+  margin: 0;
 }
 .note-row {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
-  padding: 18px 0;
-  border-top: 1px solid var(--line);
+  gap: 12px;
+  padding: 28px 0;
 }
-.note-row:last-child {
-  border-bottom: 1px solid var(--line);
+.note-row + .note-row {
+  border-top: 1px solid var(--line);
 }
 @media (min-width: 768px) {
   .note-row {
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
     gap: 40px;
+    padding: 36px 0;
   }
 }
 .note-row dt {
-  padding-top: 3px;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
 }
 .note-row dd {
   margin: 0;
   max-width: 64ch;
-  font-size: 16px;
-  line-height: 1.65;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.6;
   color: var(--body);
 }
 
+/* The way back, as the site sets a page's related links: small paper pills
+   under the notes, aligned to the notes' reading column. */
 .footer-credit {
-  margin: 36px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0 0;
 }
-/* The site's arrow link: chase underline, arrow nudges on hover. */
-.arrow-link {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 15px;
-  color: var(--accent-ink);
-  text-decoration: none;
+@media (min-width: 768px) {
+  .footer-credit {
+    padding-left: calc((100% - 40px) / 3 + 40px);
+  }
 }
-.arrow-link::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: -2px;
-  height: 1.5px;
-  width: 100%;
-  background: currentColor;
-  transform: scaleX(0);
-  transform-origin: right center;
-  transition: transform var(--dur-struct) var(--ease-expo);
+/* On the open page, not on a plate, so these take the site's own ghost:
+   --surface under a hairline. */
+.footer-credit .btn {
+  background: var(--surface);
+  border-color: var(--line);
 }
-.arrow-link span {
+.footer-credit .btn:hover {
+  background: var(--surface-2);
+  border-color: var(--line-2);
+}
+.footer-credit .btn span {
   transition: transform 0.2s ease;
 }
 @media (hover: hover) and (pointer: fine) {
-  .arrow-link:hover::after {
-    transform: scaleX(1);
-    transform-origin: left center;
-  }
-  .arrow-link:hover span {
-    transform: translateX(3px);
+  .footer-credit .btn:hover span {
+    transform: translateX(2px);
   }
 }
 
-/* Filled, and hairline-bordered rather than button-bordered. A .pill and a .btn
-   shared family, size, tracking, case and radius, and differed only in padding
-   — so a read-only "4 RECORDINGS" chip sat in a header row reading as the first
-   of six buttons. A control is an outline you can press; a chip is a filled
-   patch of tint you cannot. */
+/* A chip, not a control: a filled patch of tint you cannot press, where a
+   button is a pill with an edge. Grotesk like every other small UI label. */
 .pill {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 12.5px;
-  letter-spacing: 0.005em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0;
   background: var(--tint);
   border: 1px solid var(--line);
   border-radius: var(--r-chip);
   padding: 6px 14px;
-  /* --muted measures 4.40:1 at this size and weight on --tint: a hairline miss
-     of AA, on the one element that reconciles the header count with the rail —
-     the number a researcher checks before citing anything. --body-2 measures
-     7.0:1 and the chip stays quieter than the h1 beside it by size, weight and
-     ground rather than by contrast alone. */
+  /* --body-2 rather than --muted: this is the number a researcher checks
+     before citing anything, and it stays quieter than the h1 beside it by
+     size, weight and ground rather than by contrast. */
   color: var(--body-2);
   white-space: nowrap;
 }
 .pill-quiet {
   color: var(--accent-ink);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-color: var(--line-2);
 }
-/* A count is a caption on the heading beside it, and nothing you can press.
-   The class was applied in two places and styled in none, so both counts fell
-   back to the base chip — a filled, bordered lozenge the same size and shape as
-   .btn-small. Next to a real button that reads as a disabled control, which is
-   an affordance the number does not have. Ground and border come off and the
-   inline padding goes with them, since the flex gap already sets it off the
-   title. The colour is deliberately not overridden: --body-2 is the value the
-   base rule reasoned to for AA on this exact element. */
+/* A count is a caption on the heading beside it, and nothing you can press, so
+   the ground and border come off and the inline padding goes with them. */
 .pill-count {
   background: none;
   border-color: transparent;
   padding-inline: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Controls --------------------------------------------------------- */
-/* Pills. The primary is an ink outline that fills on hover and flips its label
-   to the ground color, same contract as the site's buttons.
+/* The site's buttons: pills, sentence case, the grotesk at medium weight.
  *
- * Sentence case at 13px, not tracked uppercase at 12px. The label voice is for
- * structural eyebrows — EXP-038, the stack line, SUMMARY — and it was being
- * spent on every button, chip, table header and stat label in the app: on the
- * results screen alone that was five stat labels, five view chips, four table
- * headers, an export button and a Delete per row, all shouting at once, which
- * is the same as none of them shouting. Uppercase at 11-12px is also measurably
- * slower to read, and a button label is a thing you read to decide what to
- * press. The weight goes up to hold the presence the tracking was providing. */
+ * The default .btn is the site's ghost: a paper pill with a hairline that
+ * darkens on hover. Paper, not --surface as on the site's open page, because
+ * nearly every button in this app sits on a --surface plate and a
+ * surface-on-surface pill would be an outline floating on its own ground. The
+ * stroke is --line-2 for the same reason: it is the hairline that survives on
+ * --surface.
+ *
+ * Never the mono, and never tracked capitals: a button label is a thing you
+ * read to decide what to press. */
 
 .btn {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.005em;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  background: var(--bg);
   color: var(--strong);
-  /* The shared container edge — see --edge at the top of this file. A button is
-     the loudest thing wearing it, so it takes the extra half pixel of weight
-     rather than a colour of its own. */
-  border: 1.5px solid var(--edge);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-chip);
-  padding: 12px 24px;
+  padding: 11px 20px;
   cursor: pointer;
+  text-decoration: none;
   transition:
     background-color 0.2s,
     border-color 0.2s,
     color 0.2s;
 }
 .btn:hover {
-  border-color: var(--strong);
+  background: var(--surface-2);
+  border-color: var(--rule);
 }
-/* The one committing action per screen is filled at rest.
- *
- * The site's outline-that-fills-on-hover contract still governs links and
- * secondary actions, and it is right for them — but with every button in the
- * product wearing it, "Run session" and "Results" carried identical weight,
- * and a moderator running a participant under time pressure had no visual
- * anchor. One filled pill per screen, everything else outlined. */
+/* Touch: every pill button clears a 40px target. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 40px;
+  }
+}
+/* The one committing action per screen is the solid ink pill, the site's
+ * primary. One filled pill per screen, everything else paper: with every
+ * button wearing the same weight, "Run session" and "Results" read alike, and
+ * a moderator running a participant under time pressure had no anchor. */
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -623,10 +699,12 @@ p {
    "Delete") measured 4.40:1 on --tint at 12px/600, and the resting state of a
    destructive control is not the place to spend a hairline AA miss. */
 .btn-ghost {
+  background: transparent;
   border-color: transparent;
   color: var(--body-2);
 }
 .btn-ghost:hover {
+  background: var(--surface-2);
   border-color: transparent;
   color: var(--strong);
 }
@@ -637,16 +715,16 @@ p {
    run of four. Bordered in the hairline rather than the edge, so the cluster
    still ranks: Run session and Results carry --edge, these carry --line. */
 .btn-quiet {
-  border-color: var(--line);
-  color: var(--muted);
+  border-color: var(--line-2);
+  color: var(--body-2);
 }
 .btn-quiet:hover {
-  border-color: var(--edge);
+  border-color: var(--rule);
   color: var(--strong);
 }
 .btn-small {
-  padding: 8px 16px;
-  font-size: 12px;
+  padding: 9px 16px;
+  font-size: 13px;
 }
 .btn.is-active {
   border-color: var(--accent);
@@ -735,7 +813,7 @@ p {
   -webkit-appearance: none;
   padding-right: 38px;
   cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%235f6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%235e5d59' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 13px center;
   background-size: 11px 8px;
@@ -766,8 +844,8 @@ p {
 /* The field at fault, marked where the mistake is rather than only in a
    sentence three fields away. */
 .input.is-invalid {
-  border-color: var(--accent-warm-ink);
-  box-shadow: 0 0 0 1px var(--accent-warm-ink);
+  border-color: var(--signal-bad);
+  box-shadow: 0 0 0 1px var(--signal-bad);
 }
 /* A unit belongs in the field, not in the label. "Duration (seconds, 0 =
    manual)" wrapped to two lines at 12px uppercase and knocked its input out of
@@ -783,7 +861,7 @@ p {
 .input-suffix-unit {
   position: absolute;
   right: 13px;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 12.5px;
   font-weight: 500;
   letter-spacing: 0;
@@ -884,7 +962,7 @@ p {
 .checkbox input:checked {
   background-color: var(--accent);
   border-color: var(--accent);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fef6e9' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4 6.6 11.5 12.5 5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23faf9f5' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4 6.6 11.5 12.5 5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 14px 14px;
@@ -897,14 +975,14 @@ p {
 /* The card recipe, at panel scale. */
 .panel {
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid transparent;
   border-radius: var(--r-card);
-  padding: 28px;
+  padding: 20px;
   margin-bottom: 32px;
 }
 @media (min-width: 768px) {
   .panel {
-    padding: 40px;
+    padding: 32px;
   }
 }
 
@@ -1150,7 +1228,7 @@ p {
   gap: 18px;
   align-items: center;
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid transparent;
   border-radius: var(--r-card);
   padding: 16px;
   transition: border-color 0.25s ease;
@@ -1218,7 +1296,7 @@ p {
    case-sensitive, so "HTTPS://EXAMPLE.COM/Pricing" is a different address from
    the one the study will actually load. It also turned "15s" into "15S". */
 .study-body p.study-meta {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.01em;
@@ -1226,8 +1304,8 @@ p {
   overflow-wrap: anywhere;
 }
 .study-meta .meta-k {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  text-transform: none;
+  letter-spacing: 0;
 }
 .study-meta .meta-url {
   color: var(--body-2);
@@ -1323,7 +1401,7 @@ p {
   background: currentColor;
 }
 .signal-more {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 11px;
   color: var(--body-2);
   align-self: center;
@@ -1352,7 +1430,7 @@ p {
 .empty {
   text-align: center;
   padding: 52px 20px;
-  border: 1px dashed var(--edge);
+  border: 1px dashed var(--rule);
   border-radius: var(--r-card);
 }
 /* The handheld zero state: a sentence, not a container. */
@@ -1436,7 +1514,7 @@ p {
 .stimulus-frame {
   width: 100%;
   aspect-ratio: 16 / 10;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line-2);
   border-radius: 8px;
   overflow: hidden;
   background: #fff;
@@ -1458,7 +1536,7 @@ p {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #003f48;
+  background: #141413;
   border: 1px solid var(--edge);
   border-radius: 8px;
   overflow: hidden;
@@ -1488,19 +1566,19 @@ p {
   width: 27%;
   min-width: 92px;
   aspect-ratio: 3 / 4;
-  border: 2px dashed color-mix(in srgb, #fdf4e7 50%, transparent);
+  border: 2px dashed color-mix(in srgb, #faf9f5 50%, transparent);
   border-radius: 50%;
   transition:
     border-color 0.3s ease,
     opacity 0.3s ease;
 }
 .camera-guide-hint {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.005em;
-  color: color-mix(in srgb, #fdf4e7 78%, transparent);
-  text-shadow: 0 1px 3px rgba(0, 30, 35, 0.6);
+  color: color-mix(in srgb, #faf9f5 78%, transparent);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
   transition: opacity 0.3s ease;
 }
 .camera-preview.is-lost .camera-guide-oval {
@@ -1605,7 +1683,7 @@ p {
   padding: 14px 16px;
   border-radius: 8px;
   background: var(--tint);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line-2);
 }
 .accuracy strong {
   display: flex;
@@ -1658,7 +1736,8 @@ p {
 
 /* --- The two dark rooms ----------------------------------------------- */
 /* Calibration and recording take over the whole screen and remap to the
-   site's band tokens, so everything inside recomposes with no extra styling.
+   site's band tokens (the near-black surface the site keeps for its menu and
+   footer), so everything inside recomposes with no extra styling.
    They are dark for a reason that is not decoration: a participant's pupils
    adapt to whatever the chrome is doing, and a calibration dot has to be the
    brightest thing on the screen or the eye never commits to it. */
@@ -1666,24 +1745,27 @@ p {
 .calib-overlay,
 .record-stage {
   color-scheme: dark;
-  --bg: #003f48;
-  --surface: #0c4a53;
-  --line: #2b5a62;
-  --rule: #cfe0e2;
-  --accent: #ffb8a4;
-  --accent-ink: #ffb8a4;
-  --accent-contrast: #003f48;
+  --bg: #141413;
+  --surface: #1f1e1d;
+  --surface-2: #262624;
+  --line: #30302e;
+  --line-2: #3d3d3a;
+  --rule: #4d4c48;
+  --accent: #faf9f5;
+  --accent-ink: #faf9f5;
+  --accent-contrast: #141413;
   /* Carried over from .band in tokens.css: without it a filled primary button
-     in a dark room would take its hover from the cream palette and go
-     dark-teal-on-teal. */
-  --accent-hover: #ffd0c2;
-  --accent-warm: #ffb8a4;
-  --accent-warm-ink: #ffb8a4;
-  --tint: #0c4a53;
-  --strong: #fdf4e7;
-  --body: #d9e5e4;
-  --body-2: #c3d4d4;
-  --muted: #9fb6ba;
+     in a dark room would take its hover from the paper palette and go
+     ink-on-ink. */
+  --accent-hover: #e8e6dc;
+  --accent-warm: #f0b429;
+  --accent-warm-ink: #f0b429;
+  --accent-warm-deep: #f0b429;
+  --tint: #262624;
+  --strong: #faf9f5;
+  --body: #e8e6dc;
+  --body-2: #c2c0b6;
+  --muted: #9c9a92;
   --signal-good: #7fd4a8;
   --signal-warn: #f0c674;
   --signal-bad: #ff9c8f;
@@ -1777,7 +1859,7 @@ p {
 }
 .calib-progress {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.005em;
@@ -1853,12 +1935,15 @@ p {
   margin: -22px 0 0 -22px;
   border-radius: 50%;
   background: transparent;
-  border: 3px solid var(--accent);
+  /* Marigold, the one color in the room: the ring is what draws the eye
+     across a near-black screen, and a paper ring would be one more piece of
+     paper-coloured text. 9.9:1 on the ground. */
+  border: 3px solid var(--accent-warm);
   padding: 0;
   cursor: pointer;
   box-shadow:
-    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
-    0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+    0 0 0 1.5px color-mix(in srgb, #faf9f5 65%, transparent),
+    0 0 0 6px color-mix(in srgb, var(--accent-warm) 22%, transparent);
   animation: pulse 1.4s ease-in-out infinite;
 }
 /* The thing to look at: 4px, the highest contrast on the screen, dead centre. */
@@ -1881,7 +1966,7 @@ p {
   border-width: 6px;
   border-color: var(--signal-good);
   box-shadow:
-    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+    0 0 0 1.5px color-mix(in srgb, #faf9f5 65%, transparent),
     0 0 0 10px color-mix(in srgb, var(--signal-good) 20%, transparent);
 }
 /* Face lost. Last in the cascade so it wins over .is-active: a dot that is
@@ -1893,7 +1978,7 @@ p {
   animation: none;
   border-color: var(--signal-warn);
   box-shadow:
-    0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
+    0 0 0 1.5px color-mix(in srgb, #faf9f5 65%, transparent),
     0 0 0 10px color-mix(in srgb, var(--signal-warn) 22%, transparent);
 }
 .calib-dot.is-lost .calib-ring-sweep {
@@ -1906,12 +1991,12 @@ p {
    wraps within the block rather than pushing the counter off centre. */
 .calib-lost {
   margin: 2px 0 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 12.5px;
   letter-spacing: 0.005em;
   line-height: 1.4;
   color: var(--signal-warn);
-  background: color-mix(in srgb, #003f48 82%, transparent);
+  background: color-mix(in srgb, #141413 82%, transparent);
   padding: 6px 12px;
   border-radius: 8px;
 }
@@ -1919,13 +2004,13 @@ p {
   0%,
   100% {
     box-shadow:
-      0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
-      0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+      0 0 0 1.5px color-mix(in srgb, #faf9f5 65%, transparent),
+      0 0 0 6px color-mix(in srgb, var(--accent-warm) 22%, transparent);
   }
   50% {
     box-shadow:
-      0 0 0 1.5px color-mix(in srgb, #fdf4e7 65%, transparent),
-      0 0 0 14px color-mix(in srgb, var(--accent) 6%, transparent);
+      0 0 0 1.5px color-mix(in srgb, #faf9f5 65%, transparent),
+      0 0 0 14px color-mix(in srgb, var(--accent-warm) 8%, transparent);
   }
 }
 /* The dwell ring: a determinate sweep over settle + dwell, so "hold your gaze"
@@ -1961,7 +2046,7 @@ p {
   stroke-linecap: round;
 }
 .calib-ring-track {
-  stroke: color-mix(in srgb, #fdf4e7 28%, transparent);
+  stroke: color-mix(in srgb, #faf9f5 28%, transparent);
 }
 .calib-ring-sweep {
   stroke: var(--signal-good);
@@ -2047,8 +2132,8 @@ p {
      corner of the stimulus — rather than as time remaining. The rule above the
      fill separates it from the stimulus edge it underlines. */
   height: 10px;
-  background: #002b32;
-  border-top: 1px solid color-mix(in srgb, #fdf4e7 22%, transparent);
+  background: #0a0a09;
+  border-top: 1px solid color-mix(in srgb, #faf9f5 22%, transparent);
 }
 .record-progress {
   height: 100%;
@@ -2079,7 +2164,7 @@ p {
 /* The band is teal and the pills sit on it, but a stimulus that does not fill
    the width leaves teal beside it too — the backing keeps one recipe for both. */
 .record-controls .btn {
-  background: color-mix(in srgb, #003f48 82%, transparent);
+  background: color-mix(in srgb, #141413 82%, transparent);
 }
 /* Finish is the one control in the strip that should be reached for, so it
    keeps its filled peach rather than taking the backing above. */
@@ -2102,7 +2187,7 @@ p {
    reaches for. */
 .record-controls .btn.is-armed,
 .record-controls .btn.is-armed:hover {
-  background: color-mix(in srgb, #003f48 82%, transparent);
+  background: color-mix(in srgb, #141413 82%, transparent);
   border-color: var(--signal-bad);
   color: var(--signal-bad);
 }
@@ -2122,7 +2207,7 @@ p {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: color-mix(in srgb, #003f48 82%, transparent);
+  background: color-mix(in srgb, #141413 82%, transparent);
   border-radius: var(--r-chip);
   padding: 6px 14px;
   white-space: nowrap;
@@ -2155,7 +2240,7 @@ p {
    tracked 11px uppercase. It is also a participant label someone typed — "p04"
    is not "P04" — so it is shown as written. */
 .record-participant {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.005em;
@@ -2172,11 +2257,11 @@ p {
   text-align: right;
 }
 .record-hint {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 13px;
   letter-spacing: 0.005em;
   color: var(--body-2);
-  background: color-mix(in srgb, #003f48 82%, transparent);
+  background: color-mix(in srgb, #141413 82%, transparent);
   /* Transparent at rest so gaining a border in .is-lost cannot shift the strip
      it sits in at the moment it fires. */
   border: 1px solid transparent;
@@ -2187,7 +2272,7 @@ p {
 /* The one condition during capture that silently destroys a recording — an
  * alarm, and not a second button.
  *
- * The chip's resting ground is 82% of #003f48 over the #003f48 band, invisible
+ * The chip's resting ground is 82% of #141413 over the #141413 band, invisible
  * by construction, so "Face lost" began as loose salmon type floating in the
  * chrome, quieter than the participant label beside it. Giving it an outline
  * fixed that and introduced the opposite problem: an outlined salmon pill 26px
@@ -2283,8 +2368,8 @@ p {
   height: 18px;
   margin: -9px 0 0 -9px;
   border-radius: 50%;
-  background: color-mix(in srgb, #ffb8a4 55%, transparent);
-  border: 2px solid color-mix(in srgb, #fdf4e7 90%, transparent);
+  background: color-mix(in srgb, #f0b429 60%, transparent);
+  border: 2px solid color-mix(in srgb, #faf9f5 90%, transparent);
   pointer-events: none;
   will-change: transform;
 }
@@ -2327,10 +2412,10 @@ p {
   display: grid;
   gap: 2px;
   padding: 6px;
-  background: var(--surface);
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--strong) 16%, transparent);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--strong) 10%, transparent);
 }
 .menu[hidden] {
   display: none;
@@ -2470,7 +2555,7 @@ p {
   color: var(--body-2);
 }
 .next-steps li::marker {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-weight: 600;
   color: var(--muted);
 }
@@ -2572,7 +2657,7 @@ p {
 }
 .results-block {
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid transparent;
   border-radius: var(--r-card);
   padding: 18px 20px;
 }
@@ -2598,7 +2683,7 @@ p {
      colour, and the spotlight view changes it (see .stage--spotlight). */
   --stage-ground: color-mix(in srgb, var(--strong) 8%, var(--surface));
   background: var(--stage-ground);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-card);
   overflow: hidden;
   display: flex;
@@ -2845,7 +2930,7 @@ p {
    scroll contexts fought over the wheel. The sidebar flows with the page. */
 .results-sidebar {
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid transparent;
   border-radius: var(--r-card);
   padding: 20px;
 }
@@ -2864,7 +2949,7 @@ p {
   gap: 12px 20px;
   padding: 16px 20px;
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line-2);
   /* Joined to the stage above rather than floating clear of it. */
   border-top: 0;
   border-radius: 0 0 var(--r-card) var(--r-card);
@@ -2890,7 +2975,7 @@ p {
   display: grid;
   gap: 8px;
   background: var(--surface);
-  border: 1px solid var(--edge);
+  border: 1px solid transparent;
   border-radius: var(--r-card);
   padding: 14px 16px;
 }
@@ -3020,7 +3105,7 @@ p {
   max-width: 60ch;
 }
 .legend-how > summary {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-weight: 600;
   font-size: 12px;
   letter-spacing: 0.005em;
@@ -3102,10 +3187,10 @@ p {
  * track, and the inactive ink comes up from --muted so the group does not look
  * three-quarters disabled. */
 .seg {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.005em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 13.5px;
+  letter-spacing: 0;
   background: var(--surface);
   border: 0;
   /* Inset rather than a border: a real border would take 1px out of the cell
@@ -3642,7 +3727,7 @@ abbr[title] {
   left: 13px;
   background: var(--accent);
   color: var(--accent-contrast);
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 11px;
   font-weight: 500;
   /* Stated, the way .aoi-ordinal states its own — a chip on the stage should
@@ -4122,7 +4207,7 @@ abbr[title] {
   gap: 6px 12px;
   padding: 10px 12px;
   background: var(--surface);
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--line);
 }
 /* What the expanded figure covers: the study, and who is in it. It is the one
    line that makes the screenshot people take from here citable — the bar
